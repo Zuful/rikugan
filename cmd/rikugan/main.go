@@ -15,6 +15,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 
 	"github.com/Zuful/rikugan/internal/dispatcher"
+	"github.com/Zuful/rikugan/internal/provider/kubernetes"
 )
 
 // version is set at build-time via -ldflags.
@@ -53,8 +54,19 @@ func run(logger *slog.Logger) error {
 		server.WithRecovery(),              // recover panics inside handlers
 	)
 
-	// ── Dispatcher (no providers registered yet) ────────────────────
-	_ = dispatcher.New(mcpSrv, logger)
+	// ── Dispatcher ──────────────────────────────────────────────────
+	d := dispatcher.New(mcpSrv, logger)
+
+	// ── Providers ──────────────────────────────────────────────────
+	k8s, err := kubernetes.New(
+		kubernetes.WithLogger(logger),
+	)
+	if err != nil {
+		return fmt.Errorf("init kubernetes provider: %w", err)
+	}
+	if err := d.Register(k8s); err != nil {
+		return fmt.Errorf("register kubernetes provider: %w", err)
+	}
 
 	// ── STDIO transport ─────────────────────────────────────────────
 	stdio := server.NewStdioServer(mcpSrv)

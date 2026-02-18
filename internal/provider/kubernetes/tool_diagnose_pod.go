@@ -1,0 +1,350 @@
+package kubernetes
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"io"
+	"log/slog"
+	"sort"
+	"strings"
+	"time"
+
+	"golang.org/x/sync/errgroup"
+
+	"github.com/mark3labs/mcp-go/mcp"
+
+	"github.com/Zuful/rikugan/internal/provider"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
+
+const (
+	defaultTailLines = int64(50)
+	maxEvents        = 20
+)
+
+// diagnosePodTool returns the ToolDefinition for the diagnose_pod compound tool.
+func (p *KubernetesProvider) diagnosePodTool() provider.ToolDefinition {
+	tool := mcp.NewTool("diagnose_pod",
+		mcp.WithDescription(
+			"Diagnose a Kubernetes pod by gathering its status, conditions, "+
+				"recent events, and container logs in a single call. "+
+				"Returns a structured Markdown report.",
+		),
+		mcp.WithString("namespace",
+			mcp.Required(),
+			mcp.Description("Kubernetes namespace of the pod"),
+		),
+		mcp.WithString("pod",
+			mcp.Required(),
+			mcp.Description("Name of the pod to diagnose"),
+		),
+		mcp.WithNumber("tail",
+			mcp.Description("Number of log lines to retrieve per container (default 50)"),
+		),
+	)
+
+	return provider.ToolDefinition{
+		Tool:    tool,
+		Handler: p.handleDiagnosePod,
+	}
+}
+
+// handleDiagnosePod is the MCP handler for diagnose_pod.
+func (p *KubernetesProvider) handleDiagnosePod(
+	ctx context.Context,
+	req mcp.CallToolRequest,
+) (*mcp.CallToolResult, error) {
+	// ── Parse arguments ─────────────────────────────────────────────
+	ns, err := req.RequireString("namespace")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	podName, err := req.RequireString("pod")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	tail := defaultTailLines
+	if v, vErr := req.RequireFloat("tail"); vErr == nil && v > 0 {
+		tail = int64(v)
+	}
+
+	p.logger.Info("diagnose_pod called",
+		slog.String("namespace", ns),
+		slog.String("pod", podName),
+		slog.Int64("tail", tail),
+	)
+
+	// ── Fan-out: pod, events, logs concurrently ─────────────────────
+	var (
+		pod    *corev1.Pod
+		events []corev1.Event
+		logs   map[string]string // container name → log text
+	)
+
+	g, gCtx := errgroup.WithContext(ctx)
+
+	g.Go(func() error {
+		var gErr error
+		pod, gErr = p.client.CoreV1().Pods(ns).Get(gCtx, podName, metav1.GetOptions{})
+		if gErr != nil {
+			return fmt.Errorf("get pod: %w", gErr)
+		}
+		return nil
+	})
+
+	g.Go(func() error {
+		// Field selector filters events by the involved object name.
+		eventList, gErr := p.client.CoreV1().Events(ns).List(gCtx, metav1.ListOptions{
+			FieldSelector: fmt.Sprintf("involvedObject.name=%s", podName),
+		})
+		if gErr != nil {
+			return fmt.Errorf("list events: %w", gErr)
+		}
+		events = eventList.Items
+		return nil
+	})
+
+	g.Go(func() error {
+		logs = p.fetchLogs(gCtx, ns, podName, tail)
+		return nil // log fetch is best-effort; errors are inlined
+	})
+
+	if err = g.Wait(); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("diagnostic failed: %v", err)), nil
+	}
+
+	// ── Build report ────────────────────────────────────────────────
+	report := p.buildReport(ns, podName, pod, events, logs)
+	return mcp.NewToolResultText(report), nil
+}
+
+// fetchLogs retrieves the last `tail` lines from every container in the pod.
+// If a container has restarted, it also fetches logs from the previous instance.
+// Errors are captured inline (best-effort).
+func (p *KubernetesProvider) fetchLogs(
+	ctx context.Context,
+	ns, podName string,
+	tail int64,
+) map[string]string {
+	result := make(map[string]string)
+
+	// We need the pod spec to know container names — but the pod may not
+	// have been fetched yet by the errgroup sibling. Use the API directly.
+	pod, err := p.client.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		result["_error"] = fmt.Sprintf("could not fetch pod for log retrieval: %v", err)
+		return result
+	}
+
+	for _, c := range pod.Spec.Containers {
+		// Current logs
+		logStr := p.readLog(ctx, ns, podName, c.Name, tail, false)
+		result[c.Name] = logStr
+
+		// Previous-instance logs if container has restarted
+		for _, cs := range pod.Status.ContainerStatuses {
+			if cs.Name == c.Name && cs.RestartCount > 0 {
+				prev := p.readLog(ctx, ns, podName, c.Name, tail, true)
+				if prev != "" {
+					result[c.Name+" (previous)"] = prev
+				}
+				break
+			}
+		}
+	}
+
+	return result
+}
+
+// readLog fetches log lines for a single container.
+func (p *KubernetesProvider) readLog(
+	ctx context.Context,
+	ns, podName, container string,
+	tail int64,
+	previous bool,
+) string {
+	opts := &corev1.PodLogOptions{
+		Container: container,
+		TailLines: &tail,
+		Previous:  previous,
+	}
+
+	stream, err := p.client.CoreV1().Pods(ns).GetLogs(podName, opts).Stream(ctx)
+	if err != nil {
+		return fmt.Sprintf("[error fetching logs: %v]", err)
+	}
+	defer stream.Close()
+
+	var buf bytes.Buffer
+	if _, err = io.Copy(&buf, stream); err != nil {
+		return fmt.Sprintf("[error reading log stream: %v]", err)
+	}
+
+	return buf.String()
+}
+
+// ─── Report builder ─────────────────────────────────────────────────────────
+
+func (p *KubernetesProvider) buildReport(
+	ns, podName string,
+	pod *corev1.Pod,
+	events []corev1.Event,
+	logs map[string]string,
+) string {
+	var b strings.Builder
+
+	// Header
+	fmt.Fprintf(&b, "## Pod Diagnostic: %s/%s\n\n", ns, podName)
+
+	// Status summary
+	p.writeStatusSection(&b, pod)
+
+	// Conditions table
+	p.writeConditionsSection(&b, pod)
+
+	// Container statuses
+	p.writeContainerStatusSection(&b, pod)
+
+	// Events
+	p.writeEventsSection(&b, events)
+
+	// Logs
+	p.writeLogsSection(&b, logs)
+
+	return b.String()
+}
+
+func (p *KubernetesProvider) writeStatusSection(b *strings.Builder, pod *corev1.Pod) {
+	phase := string(pod.Status.Phase)
+	statusEmoji := "✅"
+
+	// Detect problematic states
+	var warnings []string
+	totalRestarts := int32(0)
+	for _, cs := range pod.Status.ContainerStatuses {
+		totalRestarts += cs.RestartCount
+		if cs.State.Waiting != nil {
+			if cs.State.Waiting.Reason == "CrashLoopBackOff" {
+				warnings = append(warnings, "CrashLoopBackOff")
+				statusEmoji = "🔴"
+			} else if cs.State.Waiting.Reason != "" {
+				warnings = append(warnings, cs.State.Waiting.Reason)
+				statusEmoji = "⚠️"
+			}
+		}
+		if cs.State.Terminated != nil && cs.State.Terminated.ExitCode != 0 {
+			warnings = append(warnings, fmt.Sprintf(
+				"container %q exited with code %d",
+				cs.Name, cs.State.Terminated.ExitCode,
+			))
+			statusEmoji = "⚠️"
+		}
+	}
+
+	headline := phase
+	if len(warnings) > 0 {
+		headline = strings.Join(warnings, ", ")
+	}
+
+	age := time.Since(pod.CreationTimestamp.Time).Truncate(time.Second)
+
+	fmt.Fprintf(b, "### Status: %s %s\n", headline, statusEmoji)
+	fmt.Fprintf(b, "**Phase:** %s | **Restarts:** %d | **Age:** %s\n\n",
+		phase, totalRestarts, age)
+}
+
+func (p *KubernetesProvider) writeConditionsSection(b *strings.Builder, pod *corev1.Pod) {
+	if len(pod.Status.Conditions) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "### Conditions\n\n")
+	fmt.Fprintf(b, "| Type | Status | Reason | Message |\n")
+	fmt.Fprintf(b, "|------|--------|--------|---------|\n")
+	for _, c := range pod.Status.Conditions {
+		msg := c.Message
+		if len(msg) > 80 {
+			msg = msg[:80] + "…"
+		}
+		fmt.Fprintf(b, "| %s | %s | %s | %s |\n",
+			c.Type, c.Status, c.Reason, msg)
+	}
+	b.WriteString("\n")
+}
+
+func (p *KubernetesProvider) writeContainerStatusSection(b *strings.Builder, pod *corev1.Pod) {
+	if len(pod.Status.ContainerStatuses) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "### Container Statuses\n\n")
+	fmt.Fprintf(b, "| Container | Ready | Restarts | State | Detail |\n")
+	fmt.Fprintf(b, "|-----------|-------|----------|-------|--------|\n")
+	for _, cs := range pod.Status.ContainerStatuses {
+		state, detail := describeContainerState(cs)
+		fmt.Fprintf(b, "| %s | %v | %d | %s | %s |\n",
+			cs.Name, cs.Ready, cs.RestartCount, state, detail)
+	}
+	b.WriteString("\n")
+}
+
+func describeContainerState(cs corev1.ContainerStatus) (string, string) {
+	switch {
+	case cs.State.Running != nil:
+		return "Running", fmt.Sprintf("since %s", cs.State.Running.StartedAt.Time.Format(time.RFC3339))
+	case cs.State.Waiting != nil:
+		return "Waiting", cs.State.Waiting.Reason + ": " + cs.State.Waiting.Message
+	case cs.State.Terminated != nil:
+		t := cs.State.Terminated
+		return "Terminated", fmt.Sprintf("exit=%d reason=%s", t.ExitCode, t.Reason)
+	default:
+		return "Unknown", ""
+	}
+}
+
+func (p *KubernetesProvider) writeEventsSection(b *strings.Builder, events []corev1.Event) {
+	if len(events) == 0 {
+		fmt.Fprintf(b, "### Events\n\nNo events found.\n\n")
+		return
+	}
+
+	// Sort by last timestamp descending
+	sort.Slice(events, func(i, j int) bool {
+		ti := events[i].LastTimestamp.Time
+		tj := events[j].LastTimestamp.Time
+		return ti.After(tj)
+	})
+
+	limit := maxEvents
+	if len(events) < limit {
+		limit = len(events)
+	}
+
+	fmt.Fprintf(b, "### Events (latest %d)\n\n", limit)
+	fmt.Fprintf(b, "| Type | Reason | Age | Message |\n")
+	fmt.Fprintf(b, "|------|--------|-----|---------|\n")
+	for _, e := range events[:limit] {
+		age := time.Since(e.LastTimestamp.Time).Truncate(time.Second)
+		msg := e.Message
+		if len(msg) > 100 {
+			msg = msg[:100] + "…"
+		}
+		fmt.Fprintf(b, "| %s | %s | %s | %s |\n",
+			e.Type, e.Reason, age, msg)
+	}
+	b.WriteString("\n")
+}
+
+func (p *KubernetesProvider) writeLogsSection(b *strings.Builder, logs map[string]string) {
+	if len(logs) == 0 {
+		return
+	}
+
+	fmt.Fprintf(b, "### Logs\n\n")
+	for name, text := range logs {
+		fmt.Fprintf(b, "#### Container: %s\n\n", name)
+		fmt.Fprintf(b, "```\n%s```\n\n", text)
+	}
+}
