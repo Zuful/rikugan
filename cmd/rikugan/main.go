@@ -16,6 +16,7 @@ import (
 
 	"github.com/Zuful/rikugan/internal/dispatcher"
 	"github.com/Zuful/rikugan/internal/provider/kubernetes"
+	"github.com/Zuful/rikugan/internal/provider/prometheus"
 )
 
 // version is set at build-time via -ldflags.
@@ -66,6 +67,17 @@ func run(logger *slog.Logger) error {
 	}
 	if err := d.Register(k8s); err != nil {
 		return fmt.Errorf("register kubernetes provider: %w", err)
+	}
+
+	prom, err := prometheus.New(prometheus.WithLogger(logger))
+	if err != nil {
+		logger.Warn("prometheus provider not available, skipping",
+			slog.String("reason", err.Error()),
+		)
+	} else {
+		if err := d.Register(prom); err != nil {
+			return fmt.Errorf("register prometheus provider: %w", err)
+		}
 	}
 
 	// ── STDIO transport ─────────────────────────────────────────────
