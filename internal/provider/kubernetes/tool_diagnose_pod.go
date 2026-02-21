@@ -21,8 +21,10 @@ import (
 )
 
 const (
-	defaultTailLines = int64(50)
+	defaultTailLines = 50
+	maxTailLines     = 1000
 	maxEvents        = 20
+	opTimeout        = 30 * time.Second
 )
 
 // diagnosePodTool returns the ToolDefinition for the diagnose_pod compound tool.
@@ -57,6 +59,10 @@ func (p *KubernetesProvider) handleDiagnosePod(
 	ctx context.Context,
 	req mcp.CallToolRequest,
 ) (*mcp.CallToolResult, error) {
+	// ── Timeout ─────────────────────────────────────────────────────
+	ctx, cancel := context.WithTimeout(ctx, opTimeout)
+	defer cancel()
+
 	// ── Parse arguments ─────────────────────────────────────────────
 	ns, err := req.RequireString("namespace")
 	if err != nil {
@@ -67,10 +73,14 @@ func (p *KubernetesProvider) handleDiagnosePod(
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
-	tail := defaultTailLines
-	if v, vErr := req.RequireFloat("tail"); vErr == nil && v > 0 {
-		tail = int64(v)
+	tailInt := req.GetInt("tail", defaultTailLines)
+	if tailInt <= 0 {
+		tailInt = defaultTailLines
 	}
+	if tailInt > maxTailLines {
+		tailInt = maxTailLines
+	}
+	tail := int64(tailInt)
 
 	p.logger.Info("diagnose_pod called",
 		slog.String("namespace", ns),
@@ -78,9 +88,14 @@ func (p *KubernetesProvider) handleDiagnosePod(
 		slog.Int64("tail", tail),
 	)
 
-	// ── Fan-out: pod, events, logs concurrently ─────────────────────
+	// ── Phase 1: fetch pod (needed by both logs and the report) ─────
+	pod, err := p.client.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("get pod: %v", err)), nil
+	}
+
+	// ── Phase 2: fan-out events + logs concurrently ─────────────────
 	var (
-		pod    *corev1.Pod
 		events []corev1.Event
 		logs   map[string]string // container name → log text
 	)
@@ -88,16 +103,6 @@ func (p *KubernetesProvider) handleDiagnosePod(
 	g, gCtx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
-		var gErr error
-		pod, gErr = p.client.CoreV1().Pods(ns).Get(gCtx, podName, metav1.GetOptions{})
-		if gErr != nil {
-			return fmt.Errorf("get pod: %w", gErr)
-		}
-		return nil
-	})
-
-	g.Go(func() error {
-		// Field selector filters events by the involved object name.
 		eventList, gErr := p.client.CoreV1().Events(ns).List(gCtx, metav1.ListOptions{
 			FieldSelector: fmt.Sprintf("involvedObject.name=%s", podName),
 		})
@@ -109,7 +114,7 @@ func (p *KubernetesProvider) handleDiagnosePod(
 	})
 
 	g.Go(func() error {
-		logs = p.fetchLogs(gCtx, ns, podName, tail)
+		logs = p.fetchLogs(gCtx, pod, tail)
 		return nil // log fetch is best-effort; errors are inlined
 	})
 
@@ -127,18 +132,12 @@ func (p *KubernetesProvider) handleDiagnosePod(
 // Errors are captured inline (best-effort).
 func (p *KubernetesProvider) fetchLogs(
 	ctx context.Context,
-	ns, podName string,
+	pod *corev1.Pod,
 	tail int64,
 ) map[string]string {
 	result := make(map[string]string)
-
-	// We need the pod spec to know container names — but the pod may not
-	// have been fetched yet by the errgroup sibling. Use the API directly.
-	pod, err := p.client.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{})
-	if err != nil {
-		result["_error"] = fmt.Sprintf("could not fetch pod for log retrieval: %v", err)
-		return result
-	}
+	ns := pod.Namespace
+	podName := pod.Name
 
 	for _, c := range pod.Spec.Containers {
 		// Current logs
