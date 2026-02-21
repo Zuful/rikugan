@@ -17,6 +17,7 @@ import (
 	"github.com/Zuful/rikugan/internal/dispatcher"
 	"github.com/Zuful/rikugan/internal/provider/kubernetes"
 	"github.com/Zuful/rikugan/internal/provider/prometheus"
+	"github.com/Zuful/rikugan/internal/provider/runes"
 )
 
 // version is set at build-time via -ldflags.
@@ -58,25 +59,33 @@ func run(logger *slog.Logger) error {
 	// ── Dispatcher ──────────────────────────────────────────────────
 	d := dispatcher.New(mcpSrv, logger)
 
-	// ── Providers ──────────────────────────────────────────────────
-	k8s, err := kubernetes.New(
-		kubernetes.WithLogger(logger),
-	)
+	// ── Build clients ─────────────────────────────────────────────
+	k8sClient, err := kubernetes.BuildClient("")
 	if err != nil {
-		return fmt.Errorf("init kubernetes provider: %w", err)
+		return fmt.Errorf("build k8s client: %w", err)
 	}
-	if err := d.Register(k8s); err != nil {
+
+	// ── Providers ──────────────────────────────────────────────────
+	k8sProv := kubernetes.NewFromClient(k8sClient, kubernetes.WithLogger(logger))
+	if err := d.Register(k8sProv); err != nil {
 		return fmt.Errorf("register kubernetes provider: %w", err)
 	}
 
-	prom, err := prometheus.New(prometheus.WithLogger(logger))
+	promAPI, err := prometheus.BuildAPI("")
 	if err != nil {
 		logger.Warn("prometheus provider not available, skipping",
 			slog.String("reason", err.Error()),
 		)
 	} else {
-		if err := d.Register(prom); err != nil {
+		promProv := prometheus.NewFromAPI(promAPI, prometheus.WithLogger(logger))
+		if err := d.Register(promProv); err != nil {
 			return fmt.Errorf("register prometheus provider: %w", err)
+		}
+
+		// Runes: only when both clients are available
+		runesProv := runes.New(k8sClient, promAPI, runes.WithLogger(logger))
+		if err := d.Register(runesProv); err != nil {
+			return fmt.Errorf("register runes provider: %w", err)
 		}
 	}
 

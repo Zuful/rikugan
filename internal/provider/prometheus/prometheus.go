@@ -39,6 +39,31 @@ func WithLogger(logger *slog.Logger) Option {
 	return func(o *options) { o.logger = logger }
 }
 
+// BuildAPI creates a promv1.API from a Prometheus server URL.
+// If url is empty it falls back to PROMETHEUS_URL.
+func BuildAPI(url string) (promv1.API, error) {
+	if url == "" {
+		url = os.Getenv("PROMETHEUS_URL")
+	}
+	if url == "" {
+		return nil, fmt.Errorf("prometheus URL not configured: set PROMETHEUS_URL or use WithURL")
+	}
+	client, err := promapi.NewClient(promapi.Config{Address: url})
+	if err != nil {
+		return nil, fmt.Errorf("create prometheus client: %w", err)
+	}
+	return promv1.NewAPI(client), nil
+}
+
+// NewFromAPI constructs a PrometheusProvider from a pre-built API.
+func NewFromAPI(api promv1.API, opts ...Option) *PrometheusProvider {
+	o := &options{logger: slog.Default()}
+	for _, fn := range opts {
+		fn(o)
+	}
+	return &PrometheusProvider{api: api, logger: o.logger}
+}
+
 // New creates a PrometheusProvider. It resolves the URL in this order:
 //  1. Explicit URL via WithURL
 //  2. PROMETHEUS_URL environment variable
@@ -51,16 +76,9 @@ func New(opts ...Option) (*PrometheusProvider, error) {
 		fn(o)
 	}
 
-	if o.url == "" {
-		o.url = os.Getenv("PROMETHEUS_URL")
-	}
-	if o.url == "" {
-		return nil, fmt.Errorf("prometheus URL not configured: set PROMETHEUS_URL or use WithURL")
-	}
-
-	client, err := promapi.NewClient(promapi.Config{Address: o.url})
+	api, err := BuildAPI(o.url)
 	if err != nil {
-		return nil, fmt.Errorf("create prometheus client: %w", err)
+		return nil, err
 	}
 
 	o.logger.Info("prometheus provider initialised",
@@ -68,7 +86,7 @@ func New(opts ...Option) (*PrometheusProvider, error) {
 	)
 
 	return &PrometheusProvider{
-		api:    promv1.NewAPI(client),
+		api:    api,
 		logger: o.logger,
 	}, nil
 }
