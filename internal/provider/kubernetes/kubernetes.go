@@ -42,9 +42,10 @@ func WithLogger(logger *slog.Logger) Option {
 }
 
 // BuildClient creates a kubernetes.Interface using the standard config
-// resolution chain: explicit path → KUBECONFIG env → ~/.kube/config → in-cluster.
+// resolution chain: explicit path → KUBECONFIG env → in-cluster → ~/.kube/config.
+// It logs which auth method was used at INFO level.
 func BuildClient(kubeconfig string) (kubernetes.Interface, error) {
-	cfg, err := buildConfig(kubeconfig)
+	cfg, method, err := buildConfig(kubeconfig)
 	if err != nil {
 		return nil, fmt.Errorf("build k8s config: %w", err)
 	}
@@ -52,6 +53,7 @@ func BuildClient(kubeconfig string) (kubernetes.Interface, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create k8s clientset: %w", err)
 	}
+	slog.Info("kubernetes client initialised", slog.String("auth_method", method))
 	return cs, nil
 }
 
@@ -70,8 +72,8 @@ func NewFromClient(client kubernetes.Interface, opts ...Option) *KubernetesProvi
 // New creates a KubernetesProvider. It resolves the kubeconfig in this order:
 //  1. Explicit path via WithKubeconfig
 //  2. KUBECONFIG environment variable
-//  3. ~/.kube/config
-//  4. In-cluster config (when running inside a pod)
+//  3. In-cluster config (when running inside a pod)
+//  4. ~/.kube/config
 func New(opts ...Option) (*KubernetesProvider, error) {
 	o := &options{
 		logger: slog.Default(),
@@ -104,27 +106,50 @@ func (p *KubernetesProvider) Tools() []provider.ToolDefinition {
 	}
 }
 
-// buildConfig resolves a *rest.Config using the priority chain described on New.
-func buildConfig(explicit string) (*rest.Config, error) {
+// buildConfig resolves a *rest.Config and returns the auth method used.
+// Resolution order: explicit path → KUBECONFIG env → in-cluster → ~/.kube/config.
+func buildConfig(explicit string) (*rest.Config, string, error) {
 	// 1. Explicit path
 	if explicit != "" {
-		return clientcmd.BuildConfigFromFlags("", explicit)
+		if _, err := os.Stat(explicit); err != nil {
+			return nil, "", fmt.Errorf("explicit kubeconfig %q: %w", explicit, err)
+		}
+		cfg, err := clientcmd.BuildConfigFromFlags("", explicit)
+		if err != nil {
+			return nil, "", err
+		}
+		return cfg, "explicit:" + explicit, nil
 	}
 
 	// 2. KUBECONFIG env
 	if env := os.Getenv("KUBECONFIG"); env != "" {
-		return clientcmd.BuildConfigFromFlags("", env)
+		if _, err := os.Stat(env); err != nil {
+			return nil, "", fmt.Errorf("KUBECONFIG=%q: %w", env, err)
+		}
+		cfg, err := clientcmd.BuildConfigFromFlags("", env)
+		if err != nil {
+			return nil, "", err
+		}
+		return cfg, "env:KUBECONFIG", nil
 	}
 
-	// 3. ~/.kube/config
+	// 3. In-cluster (service account token mount)
+	if cfg, err := rest.InClusterConfig(); err == nil {
+		return cfg, "in-cluster", nil
+	}
+
+	// 4. ~/.kube/config
 	home, err := os.UserHomeDir()
 	if err == nil {
 		defaultPath := filepath.Join(home, ".kube", "config")
 		if _, statErr := os.Stat(defaultPath); statErr == nil {
-			return clientcmd.BuildConfigFromFlags("", defaultPath)
+			cfg, cfgErr := clientcmd.BuildConfigFromFlags("", defaultPath)
+			if cfgErr != nil {
+				return nil, "", cfgErr
+			}
+			return cfg, "kubeconfig:" + defaultPath, nil
 		}
 	}
 
-	// 4. In-cluster
-	return rest.InClusterConfig()
+	return nil, "", fmt.Errorf("no kubernetes configuration found: set KUBECONFIG, provide a kubeconfig path, or run inside a cluster")
 }
