@@ -1,0 +1,6 @@
+apiVersion: v2
+name: rikugan
+description: MCP server for Kubernetes observability — diagnose pods, query Prometheus, and correlate signals
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

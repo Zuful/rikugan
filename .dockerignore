@@ -1,0 +1,7 @@
+.git
+*.md
+*_test.go
+.vscode
+.idea
+.claude
+helm

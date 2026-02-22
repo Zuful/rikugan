@@ -1,0 +1,22 @@
+image:
+  repository: rikugan
+  tag: ""
+  pullPolicy: IfNotPresent
+
+prometheus:
+  url: ""
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+serviceAccount:
+  create: true
+  name: ""
+
+rbac:
+  create: true

@@ -1,0 +1,14 @@
+Rikugan MCP server deployed.
+
+Transport: STDIO (stdin/stdout)
+Service Account: {{ include "rikugan.serviceAccountName" . }}
+{{- if .Values.rbac.create }}
+RBAC: ClusterRole created with read access to pods, pods/log, and events.
+{{- end }}
+{{- if .Values.prometheus.url }}
+Prometheus: {{ .Values.prometheus.url }}
+{{- else }}
+Prometheus: not configured (set prometheus.url to enable query_range and six_eyes tools)
+{{- end }}
+
+Connect an MCP client to the pod's stdin/stdout to start using rikugan tools.
