@@ -61,7 +61,10 @@ func NewFromAPI(api promv1.API, opts ...Option) *PrometheusProvider {
 	for _, fn := range opts {
 		fn(o)
 	}
-	return &PrometheusProvider{api: api, logger: o.logger}
+	return &PrometheusProvider{
+		api:    api,
+		logger: o.logger.With(slog.String("provider", "prometheus")),
+	}
 }
 
 // New creates a PrometheusProvider. It resolves the URL in this order:
@@ -81,13 +84,14 @@ func New(opts ...Option) (*PrometheusProvider, error) {
 		return nil, err
 	}
 
-	o.logger.Info("prometheus provider initialised",
+	logger := o.logger.With(slog.String("provider", "prometheus"))
+	logger.Info("provider initialised",
 		slog.String("url", o.url),
 	)
 
 	return &PrometheusProvider{
 		api:    api,
-		logger: o.logger,
+		logger: logger,
 	}, nil
 }
 

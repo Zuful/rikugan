@@ -82,7 +82,8 @@ func (p *KubernetesProvider) handleDiagnosePod(
 	}
 	tail := int64(tailInt)
 
-	p.logger.Info("diagnose_pod called",
+	log := p.logger.With(slog.String("tool", "diagnose_pod"))
+	log.Info("tool called",
 		slog.String("namespace", ns),
 		slog.String("pod", podName),
 		slog.Int64("tail", tail),

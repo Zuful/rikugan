@@ -77,7 +77,8 @@ func (p *RunesProvider) handleSixEyes(
 		window = parsed
 	}
 
-	p.logger.Info("six_eyes called",
+	log := p.logger.With(slog.String("tool", "six_eyes"))
+	log.Info("tool called",
 		slog.String("namespace", ns),
 		slog.String("pod", podName),
 		slog.String("window", window.String()),
@@ -98,7 +99,7 @@ func (p *RunesProvider) handleSixEyes(
 		FieldSelector: fmt.Sprintf("involvedObject.name=%s", podName),
 	})
 	if err != nil {
-		p.logger.Warn("failed to list events", slog.String("error", err.Error()))
+		log.Warn("failed to list events", slog.String("error", err.Error()))
 	} else {
 		events = eventList.Items
 	}

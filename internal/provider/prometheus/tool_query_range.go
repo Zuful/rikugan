@@ -3,6 +3,7 @@ package prometheus
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -95,7 +96,8 @@ func (p *PrometheusProvider) handleQueryRange(
 		)), nil
 	}
 
-	p.logger.Info("query_range called",
+	log := p.logger.With(slog.String("tool", "query_range"))
+	log.Info("tool called",
 		"query", query,
 		"start", start.Format(time.RFC3339),
 		"end", end.Format(time.RFC3339),

@@ -61,7 +61,10 @@ func NewFromClient(client kubernetes.Interface, opts ...Option) *KubernetesProvi
 	for _, fn := range opts {
 		fn(o)
 	}
-	return &KubernetesProvider{client: client, logger: o.logger}
+	return &KubernetesProvider{
+		client: client,
+		logger: o.logger.With(slog.String("provider", "kubernetes")),
+	}
 }
 
 // New creates a KubernetesProvider. It resolves the kubeconfig in this order:
@@ -82,11 +85,12 @@ func New(opts ...Option) (*KubernetesProvider, error) {
 		return nil, err
 	}
 
-	o.logger.Info("kubernetes provider initialised")
+	logger := o.logger.With(slog.String("provider", "kubernetes"))
+	logger.Info("kubernetes provider initialised")
 
 	return &KubernetesProvider{
 		client: cs,
-		logger: o.logger,
+		logger: logger,
 	}, nil
 }
 

@@ -38,7 +38,11 @@ func New(k8s kubernetes.Interface, prom promv1.API, opts ...Option) *RunesProvid
 	for _, fn := range opts {
 		fn(o)
 	}
-	return &RunesProvider{k8s: k8s, prom: prom, logger: o.logger}
+	return &RunesProvider{
+		k8s:    k8s,
+		prom:   prom,
+		logger: o.logger.With(slog.String("provider", "runes")),
+	}
 }
 
 // Name returns the provider identifier.

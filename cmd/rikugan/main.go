@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/mark3labs/mcp-go/server"
@@ -27,13 +28,31 @@ func main() {
 	// Structured JSON logger → stderr so it never collides with the
 	// STDIO transport on stdout.
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
+		Level: parseLogLevel(os.Getenv("RIKUGAN_LOG_LEVEL")),
 	}))
 	slog.SetDefault(logger)
 
 	if err := run(logger); err != nil {
 		logger.Error("server exited with error", slog.String("error", err.Error()))
 		os.Exit(1)
+	}
+}
+
+// parseLogLevel maps a human-readable level string to slog.Level.
+// Accepted values (case-insensitive): debug, info, warn, error.
+// Unrecognised or empty values default to INFO.
+func parseLogLevel(s string) slog.Level {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "debug":
+		return slog.LevelDebug
+	case "info", "":
+		return slog.LevelInfo
+	case "warn":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
 	}
 }
 
