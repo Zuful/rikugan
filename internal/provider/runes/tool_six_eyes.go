@@ -87,28 +87,34 @@ func (p *RunesProvider) handleSixEyes(
 	now := time.Now()
 	start := now.Add(-window)
 
-	// ── Phase 1: fetch pod + events from K8s ────────────────────────
+	// ── Phase 1: fetch pod (required for query building) ────────────
 	pod, err := p.k8s.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{})
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("get pod: %v", err)), nil
 	}
 
-	// Events are best-effort
-	var events []corev1.Event
-	eventList, err := p.k8s.CoreV1().Events(ns).List(ctx, metav1.ListOptions{
-		FieldSelector: fmt.Sprintf("involvedObject.name=%s", podName),
-	})
-	if err != nil {
-		log.Warn("failed to list events", slog.String("error", err.Error()))
-	} else {
-		events = eventList.Items
-	}
-
-	// ── Phase 2: fan-out Prometheus queries ─────────────────────────
+	// ── Phase 2: fan-out events + Prometheus queries concurrently ──
 	queries := buildQueries(ns, podName, pod, start, now)
 	results := make([]MetricResult, len(queries))
 
+	var events []corev1.Event
+
 	g, gCtx := errgroup.WithContext(ctx)
+
+	// Events — best-effort, never fails the group
+	g.Go(func() error {
+		eventList, eErr := p.k8s.CoreV1().Events(ns).List(gCtx, metav1.ListOptions{
+			FieldSelector: fmt.Sprintf("involvedObject.name=%s", podName),
+		})
+		if eErr != nil {
+			log.Warn("failed to list events", slog.String("error", eErr.Error()))
+			return nil
+		}
+		events = eventList.Items
+		return nil
+	})
+
+	// Prometheus queries — each best-effort
 	for i, q := range queries {
 		g.Go(func() error {
 			val, _, qErr := p.prom.QueryRange(gCtx, q.PromQL, promv1.Range{
@@ -120,7 +126,7 @@ func (p *RunesProvider) handleSixEyes(
 			if qErr == nil {
 				results[i].Matrix = val
 			}
-			return nil // best-effort — never fail the group
+			return nil
 		})
 	}
 	_ = g.Wait()

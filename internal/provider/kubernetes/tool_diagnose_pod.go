@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -108,7 +109,8 @@ func (p *KubernetesProvider) handleDiagnosePod(
 			FieldSelector: fmt.Sprintf("involvedObject.name=%s", podName),
 		})
 		if gErr != nil {
-			return fmt.Errorf("list events: %w", gErr)
+			log.Warn("failed to list events", slog.String("error", gErr.Error()))
+			return nil // best-effort — degrade gracefully
 		}
 		events = eventList.Items
 		return nil
@@ -119,44 +121,62 @@ func (p *KubernetesProvider) handleDiagnosePod(
 		return nil // log fetch is best-effort; errors are inlined
 	})
 
-	if err = g.Wait(); err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("diagnostic failed: %v", err)), nil
-	}
+	_ = g.Wait() // all goroutines are best-effort, no error possible
 
 	// ── Build report ────────────────────────────────────────────────
 	report := p.buildReport(ns, podName, pod, events, logs)
 	return mcp.NewToolResultText(report), nil
 }
 
-// fetchLogs retrieves the last `tail` lines from every container in the pod.
-// If a container has restarted, it also fetches logs from the previous instance.
-// Errors are captured inline (best-effort).
+// fetchLogs retrieves the last `tail` lines from every container in the pod
+// concurrently. If a container has restarted, it also fetches logs from the
+// previous instance. Errors are captured inline (best-effort).
 func (p *KubernetesProvider) fetchLogs(
 	ctx context.Context,
 	pod *corev1.Pod,
 	tail int64,
 ) map[string]string {
-	result := make(map[string]string)
 	ns := pod.Namespace
 	podName := pod.Name
 
+	// Build a restart lookup for O(1) access.
+	restarts := make(map[string]int32, len(pod.Status.ContainerStatuses))
+	for _, cs := range pod.Status.ContainerStatuses {
+		restarts[cs.Name] = cs.RestartCount
+	}
+
+	// Pre-allocate result slots so goroutines write to disjoint keys.
+	result := make(map[string]string, len(pod.Spec.Containers)*2)
+	var mu sync.Mutex
+
+	g, gCtx := errgroup.WithContext(ctx)
 	for _, c := range pod.Spec.Containers {
+		name := c.Name
+
 		// Current logs
-		logStr := p.readLog(ctx, ns, podName, c.Name, tail, false)
-		result[c.Name] = logStr
+		g.Go(func() error {
+			text := p.readLog(gCtx, ns, podName, name, tail, false)
+			mu.Lock()
+			result[name] = text
+			mu.Unlock()
+			return nil
+		})
 
 		// Previous-instance logs if container has restarted
-		for _, cs := range pod.Status.ContainerStatuses {
-			if cs.Name == c.Name && cs.RestartCount > 0 {
-				prev := p.readLog(ctx, ns, podName, c.Name, tail, true)
-				if prev != "" {
-					result[c.Name+" (previous)"] = prev
+		if restarts[name] > 0 {
+			g.Go(func() error {
+				text := p.readLog(gCtx, ns, podName, name, tail, true)
+				if text != "" {
+					mu.Lock()
+					result[name+" (previous)"] = text
+					mu.Unlock()
 				}
-				break
-			}
+				return nil
+			})
 		}
 	}
 
+	_ = g.Wait()
 	return result
 }
 
