@@ -1,6 +1,6 @@
 # Rikugan
 
-Rikugan is an MCP server that gives AI agents direct visibility into Kubernetes clusters and Prometheus metrics. It exposes three tools — pod diagnostics, PromQL queries, and a correlation engine — over the [Model Context Protocol](https://modelcontextprotocol.io), letting any MCP-compatible client diagnose incidents without switching between dashboards.
+Rikugan is an MCP server that gives AI agents direct visibility into Kubernetes clusters, Prometheus metrics, and GitHub change history. It exposes five tools — pod diagnostics, PromQL queries, a correlation engine, and change intelligence — over the [Model Context Protocol](https://modelcontextprotocol.io), letting any MCP-compatible client diagnose incidents and correlate them with recent code changes without switching between dashboards.
 
 ## What is MCP?
 
@@ -64,32 +64,56 @@ The correlation engine. Combines pod diagnostics with targeted Prometheus querie
 
 The report presents findings sorted by severity, followed by pod summary, events, and raw metric data for the agent to reason over.
 
+### `get_recent_commits`
+
+Fetches the most recent commits from a GitHub repository. Useful for correlating code changes with runtime incidents.
+
+| Parameter | Type   | Required | Description                                      |
+|-----------|--------|----------|--------------------------------------------------|
+| `owner`   | string | yes      | GitHub repository owner (user or organisation)   |
+| `repo`    | string | yes      | GitHub repository name                           |
+| `branch`  | string | no       | Branch name (default: `main`)                    |
+
+Returns a Markdown table with the last 10 commits showing short SHA, author, date, and first line of the commit message.
+
+### `get_commit_diff`
+
+Fetches the full diff for a specific commit, including per-file patches.
+
+| Parameter    | Type   | Required | Description                                    |
+|--------------|--------|----------|------------------------------------------------|
+| `owner`      | string | yes      | GitHub repository owner (user or organisation) |
+| `repo`       | string | yes      | GitHub repository name                         |
+| `commit_sha` | string | yes      | Full or abbreviated commit SHA                 |
+
+Returns commit metadata (SHA, author, date, message) followed by per-file diffs. Output is capped at 10,000 characters to avoid overwhelming the agent context — if the diff exceeds this limit it is truncated with a note indicating the total size.
+
 ## Architecture
 
 ```
-┌─────────────┐   stdin/stdout    ┌──────────────────────────────────┐
-│  MCP Client  │ ◄──── JSON-RPC ────► │         Rikugan MCP Server         │
-│  (AI Agent)  │                  │                                  │
-└─────────────┘                  │  ┌────────────┐ ┌─────────────┐  │
-                                 │  │ Kubernetes  │ │ Prometheus  │  │
-                                 │  │  Provider   │ │  Provider   │  │
-                                 │  └────────────┘ └─────────────┘  │
-                                 │  ┌────────────────────────────┐  │
-                                 │  │      Runes Provider        │  │
-                                 │  │  (correlation engine)      │  │
-                                 │  └────────────────────────────┘  │
-                                 └──────────────────────────────────┘
-                                        │                │
-                                        ▼                ▼
-                                 ┌────────────┐  ┌─────────────┐
-                                 │ Kubernetes  │  │ Prometheus  │
-                                 │   API       │  │   API       │
-                                 └────────────┘  └─────────────┘
+┌─────────────┐   stdin/stdout    ┌──────────────────────────────────────────┐
+│  MCP Client  │ ◄──── JSON-RPC ────► │            Rikugan MCP Server            │
+│  (AI Agent)  │                  │                                          │
+└─────────────┘                  │  ┌────────────┐ ┌────────────┐ ┌────────┐│
+                                 │  │ Kubernetes  │ │ Prometheus │ │ GitHub ││
+                                 │  │  Provider   │ │  Provider  │ │Provider││
+                                 │  └────────────┘ └────────────┘ └────────┘│
+                                 │  ┌──────────────────────────────────────┐│
+                                 │  │          Runes Provider               ││
+                                 │  │       (correlation engine)            ││
+                                 │  └──────────────────────────────────────┘│
+                                 └──────────────────────────────────────────┘
+                                        │                │              │
+                                        ▼                ▼              ▼
+                                 ┌────────────┐  ┌─────────────┐ ┌──────────┐
+                                 │ Kubernetes  │  │ Prometheus  │ │  GitHub  │
+                                 │   API       │  │   API       │ │   API    │
+                                 └────────────┘  └─────────────┘ └──────────┘
 ```
 
 Providers are independent modules that register tools with a central dispatcher. The dispatcher wires each tool's schema and handler into the MCP server. Logging goes to stderr as structured JSON so it never interferes with the STDIO transport on stdout.
 
-The correlation engine (Runes) depends on both the Kubernetes and Prometheus clients. If Prometheus is unavailable at startup, Rikugan still serves `diagnose_pod` — the Prometheus and Runes providers are simply skipped.
+The correlation engine (Runes) depends on both the Kubernetes and Prometheus clients. If Prometheus is unavailable at startup, Rikugan still serves `diagnose_pod` — the Prometheus and Runes providers are simply skipped. The GitHub provider is independently optional — if `GITHUB_TOKEN` is unset, it is skipped with a warning and the remaining providers continue to function.
 
 Core logic — query building, correlation heuristics, report generation — lives in pure functions decoupled from MCP transport. An alternative client (CLI, web, another agent framework) can import the providers directly and call `buildQueries()`, `correlate()`, or `fetchLogs()` without an MCP server.
 
@@ -100,6 +124,7 @@ Core logic — query building, correlation heuristics, report generation — liv
 - Go 1.25+
 - Access to a Kubernetes cluster (kubeconfig or in-cluster)
 - Prometheus instance (optional, required for `query_range` and `six_eyes`)
+- GitHub personal access token (optional, required for `get_recent_commits` and `get_commit_diff`)
 
 ### Build
 
@@ -113,8 +138,14 @@ go build -o rikugan ./cmd/rikugan
 # Kubernetes only (diagnose_pod available)
 ./rikugan
 
-# With Prometheus (all tools available)
+# With Prometheus (query_range and six_eyes available)
 PROMETHEUS_URL=http://prometheus:9090 ./rikugan
+
+# With GitHub (change intelligence available)
+GITHUB_TOKEN=ghp_... ./rikugan
+
+# All providers
+PROMETHEUS_URL=http://prometheus:9090 GITHUB_TOKEN=ghp_... ./rikugan
 ```
 
 Rikugan reads its Kubernetes configuration from the standard chain: explicit path, `KUBECONFIG` env var, `~/.kube/config`, or in-cluster config.
@@ -153,7 +184,8 @@ Add to your Claude Desktop MCP configuration (`claude_desktop_config.json`):
       "command": "/path/to/rikugan",
       "env": {
         "KUBECONFIG": "/path/to/.kube/config",
-        "PROMETHEUS_URL": "http://localhost:9090"
+        "PROMETHEUS_URL": "http://localhost:9090",
+        "GITHUB_TOKEN": "ghp_..."
       }
     }
   }
@@ -178,6 +210,10 @@ A platform team wants to understand resource consumption across services. The ag
 
 A deployment is stuck — pods won't schedule. The agent calls `six_eyes`, which detects the Pending phase and automatically queries node pressure conditions. If nodes are under memory or disk pressure, it surfaces a `NODE_PRESSURE` finding with the specific condition, pointing the team toward cluster scaling or workload redistribution.
 
+### Change Correlation
+
+A pod starts crash-looping after a deployment. The agent calls `get_recent_commits` on the service's repository to see what changed, then uses `get_commit_diff` to inspect the suspicious commit. Combined with `six_eyes`, it can correlate the crash reason (e.g. OOMKill) with a specific code change (e.g. a removed memory limit or a new unbounded cache) and point the engineer directly to the relevant diff.
+
 ### Proactive Health Checks
 
 An agent on a scheduled loop calls `six_eyes` across key pods in a namespace. Healthy pods return an `INFO: HEALTHY` finding and are skipped. Any pod with warnings, restarts, or throttling gets flagged for review before it becomes an incident.
@@ -188,6 +224,8 @@ An agent on a scheduled loop calls `six_eyes` across key pods in a namespace. He
 |---------------------|-------------|----------|
 | `KUBECONFIG` | Path to kubeconfig file | No (falls back to `~/.kube/config` or in-cluster) |
 | `PROMETHEUS_URL` | Prometheus server URL | No (Prometheus and Runes tools disabled if unset) |
+| `GITHUB_TOKEN` | GitHub personal access token | No (GitHub tools disabled if unset) |
+| `RIKUGAN_LOG_LEVEL` | Log verbosity: `debug`, `info`, `warn`, `error` | No (defaults to `info`) |
 
 ## License
 

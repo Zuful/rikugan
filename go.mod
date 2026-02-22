@@ -3,9 +3,11 @@ module github.com/Zuful/rikugan
 go 1.25.0
 
 require (
+	github.com/google/go-github/v68 v68.0.0
 	github.com/mark3labs/mcp-go v0.44.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/common v0.67.5
+	golang.org/x/oauth2 v0.34.0
 	golang.org/x/sync v0.19.0
 	k8s.io/api v0.35.1
 	k8s.io/apimachinery v0.35.1
@@ -23,6 +25,7 @@ require (
 	github.com/go-openapi/jsonreference v0.20.2 // indirect
 	github.com/go-openapi/swag v0.23.0 // indirect
 	github.com/google/gnostic-models v0.7.0 // indirect
+	github.com/google/go-querystring v1.1.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/invopop/jsonschema v0.13.0 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
@@ -40,7 +43,6 @@ require (
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/net v0.48.0 // indirect
-	golang.org/x/oauth2 v0.34.0 // indirect
 	golang.org/x/sys v0.39.0 // indirect
 	golang.org/x/term v0.38.0 // indirect
 	golang.org/x/text v0.32.0 // indirect

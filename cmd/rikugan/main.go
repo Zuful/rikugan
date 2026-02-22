@@ -16,6 +16,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 
 	"github.com/Zuful/rikugan/internal/dispatcher"
+	"github.com/Zuful/rikugan/internal/provider/github"
 	"github.com/Zuful/rikugan/internal/provider/kubernetes"
 	"github.com/Zuful/rikugan/internal/provider/prometheus"
 	"github.com/Zuful/rikugan/internal/provider/runes"
@@ -88,6 +89,18 @@ func run(logger *slog.Logger) error {
 	k8sProv := kubernetes.NewFromClient(k8sClient, kubernetes.WithLogger(logger))
 	if err := d.Register(k8sProv); err != nil {
 		return fmt.Errorf("register kubernetes provider: %w", err)
+	}
+
+	ghClient, err := github.BuildClient("")
+	if err != nil {
+		logger.Warn("github provider not available, skipping",
+			slog.String("reason", err.Error()),
+		)
+	} else {
+		ghProv := github.NewFromClient(ghClient, github.WithLogger(logger))
+		if err := d.Register(ghProv); err != nil {
+			return fmt.Errorf("register github provider: %w", err)
+		}
 	}
 
 	promAPI, err := prometheus.BuildAPI("")
