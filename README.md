@@ -1,6 +1,6 @@
 # Rikugan
 
-Rikugan is an MCP server that gives AI agents direct visibility into Kubernetes clusters, Prometheus metrics, code change history from GitHub and GitLab, Argo CD deployment state, distributed traces from Jaeger, and runtime security events from Falco. It exposes thirteen tools — pod diagnostics, PromQL queries, a correlation engine, change intelligence, deployment status, trace analysis, and security audit — over the [Model Context Protocol](https://modelcontextprotocol.io), letting any MCP-compatible client diagnose incidents end-to-end without switching between dashboards.
+Rikugan is an MCP server that gives AI agents direct visibility into Kubernetes clusters, Prometheus metrics, code change history from GitHub and GitLab, Argo CD deployment state, distributed traces from Jaeger, and runtime security events from Falco. It exposes fifteen tools — pod diagnostics, cross-domain mapping, PromQL queries, a correlation engine, change intelligence, deployment status, trace analysis, and security audit — over the [Model Context Protocol](https://modelcontextprotocol.io), letting any MCP-compatible client diagnose incidents end-to-end without switching between dashboards.
 
 ## What is MCP?
 
@@ -23,6 +23,28 @@ Internally, the tool fetches the pod object first, then fans out to collect even
 - **Running** — all containers ready
 - **Warning** — non-zero exit codes, waiting states
 - **CrashLoopBackOff** — restart loop detected
+
+### `find_pods_by_service_name`
+
+Bridges Jaeger service names to Kubernetes pod names. Finds pods that belong to a logical service.
+
+| Parameter      | Type   | Required | Description                                        |
+|----------------|--------|----------|----------------------------------------------------|
+| `service_name` | string | yes      | Logical service name (e.g. from a Jaeger trace)    |
+| `namespace`    | string | no       | Kubernetes namespace (default: all namespaces)      |
+
+Searches by common labels (`app`, `app.kubernetes.io/name`) first, then falls back to pod name prefix matching if no labels match. The report indicates which match method was used so the LLM knows the confidence level, and suggests next steps (`diagnose_pod` or `six_eyes`).
+
+### `get_image_provenance`
+
+Bridges running pods to source code by extracting container image tags and identifying Git SHAs.
+
+| Parameter   | Type   | Required | Description                     |
+|-------------|--------|----------|---------------------------------|
+| `namespace` | string | yes      | Kubernetes namespace            |
+| `pod_name`  | string | yes      | Name of the pod to inspect      |
+
+Parses each container's image reference into registry, repository, and tag. If a tag matches a Git SHA pattern (7-40 hex characters), it's flagged and the report includes an explicit suggestion: *"To see the code: use `get_commit_diff` with `commit_sha: a1b2c3d`"*. Covers both regular and init containers.
 
 ### `query_range`
 

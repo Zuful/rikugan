@@ -103,6 +103,8 @@ func (p *KubernetesProvider) Name() string { return "kubernetes" }
 func (p *KubernetesProvider) Tools() []provider.ToolDefinition {
 	return []provider.ToolDefinition{
 		p.diagnosePodTool(),
+		p.findPodsByServiceTool(),
+		p.getImageProvenanceTool(),
 	}
 }
 
