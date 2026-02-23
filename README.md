@@ -1,6 +1,6 @@
 # Rikugan
 
-Rikugan is an MCP server that gives AI agents direct visibility into Kubernetes clusters, Prometheus metrics, code change history from GitHub and GitLab, and Argo CD deployment state. It exposes nine tools — pod diagnostics, PromQL queries, a correlation engine, change intelligence, and deployment status — over the [Model Context Protocol](https://modelcontextprotocol.io), letting any MCP-compatible client diagnose incidents, correlate them with recent code changes, and verify GitOps sync state without switching between dashboards.
+Rikugan is an MCP server that gives AI agents direct visibility into Kubernetes clusters, Prometheus metrics, code change history from GitHub and GitLab, Argo CD deployment state, and distributed traces from Jaeger. It exposes eleven tools — pod diagnostics, PromQL queries, a correlation engine, change intelligence, deployment status, and trace analysis — over the [Model Context Protocol](https://modelcontextprotocol.io), letting any MCP-compatible client diagnose incidents, correlate them with recent code changes, verify GitOps sync state, and pinpoint latency bottlenecks without switching between dashboards.
 
 ## What is MCP?
 
@@ -130,16 +130,41 @@ Lists all Argo CD applications that are currently Degraded, Missing, or OutOfSyn
 
 Returns a summary table of unhealthy applications with their sync status, health status, repository, and error messages. Useful for a quick health check across all GitOps deployments.
 
+### `find_slow_traces`
+
+Finds the most recent slow traces for a service from Jaeger.
+
+| Parameter      | Type   | Required | Description                                                     |
+|----------------|--------|----------|-----------------------------------------------------------------|
+| `service`      | string | yes      | Service name to search traces for                               |
+| `min_duration` | string | no       | Minimum trace duration (e.g. `500ms`, `1s`, `2.5s`). Default: no minimum |
+
+Returns a summary table of up to 5 traces with trace ID, start time, total duration, and span count. Searches a 24-hour lookback window.
+
+### `analyze_trace`
+
+Analyzes a Jaeger trace and returns a synthesized bottleneck report instead of raw span JSON.
+
+| Parameter  | Type   | Required | Description              |
+|------------|--------|----------|--------------------------|
+| `trace_id` | string | yes      | Jaeger trace ID to analyze |
+
+Parses all spans in the trace, identifies the 3 slowest spans and any spans with errors, and returns a structured report including:
+- Total trace duration and span count
+- A natural-language bottleneck summary (e.g. *"The bottleneck was `db_query` (1.8s) in service `payment-db`"*)
+- Ranked table of slowest spans with service, operation, duration, and percentage of total time
+- Error table listing any spans with error tags or log entries
+
 ## Architecture
 
 ```
 ┌─────────────┐   stdin/stdout    ┌──────────────────────────────────────────┐
 │  MCP Client  │ ◄──── JSON-RPC ────► │            Rikugan MCP Server            │
 │  (AI Agent)  │                  │                                          │
-└─────────────┘                  │  ┌──────────┐ ┌──────────┐ ┌────────┐ ┌────────┐ ┌────────┐│
-                                 │  │Kubernetes│ │Prometheus│ │ GitHub │ │ GitLab │ │Argo CD ││
-                                 │  │ Provider │ │ Provider │ │Provider│ │Provider│ │Provider││
-                                 │  └──────────┘ └──────────┘ └────────┘ └────────┘ └────────┘│
+└─────────────┘                  │  ┌──────────┐ ┌──────────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐│
+                                 │  │Kubernetes│ │Prometheus│ │ GitHub │ │ GitLab │ │Argo CD │ │ Jaeger ││
+                                 │  │ Provider │ │ Provider │ │Provider│ │Provider│ │Provider│ │Provider││
+                                 │  └──────────┘ └──────────┘ └────────┘ └────────┘ └────────┘ └────────┘│
                                  │  ┌──────────────────────────────────────┐│
                                  │  │          Runes Provider               ││
                                  │  │       (correlation engine)            ││
@@ -147,15 +172,15 @@ Returns a summary table of unhealthy applications with their sync status, health
                                  └──────────────────────────────────────────┘
                                         │                │              │
                                         ▼                ▼              ▼
-                                 ┌──────────┐ ┌──────────┐ ┌────────┐ ┌────────┐ ┌────────┐
-                                 │Kubernetes│ │Prometheus│ │ GitHub │ │ GitLab │ │Argo CD │
-                                 │  API     │ │  API     │ │  API   │ │  API   │ │  API   │
-                                 └──────────┘ └──────────┘ └────────┘ └────────┘ └────────┘
+                                 ┌──────────┐ ┌──────────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐
+                                 │Kubernetes│ │Prometheus│ │ GitHub │ │ GitLab │ │Argo CD │ │ Jaeger │
+                                 │  API     │ │  API     │ │  API   │ │  API   │ │  API   │ │  API   │
+                                 └──────────┘ └──────────┘ └────────┘ └────────┘ └────────┘ └────────┘
 ```
 
 Providers are independent modules that register tools with a central dispatcher. The dispatcher wires each tool's schema and handler into the MCP server. Logging goes to stderr as structured JSON so it never interferes with the STDIO transport on stdout.
 
-The correlation engine (Runes) depends on both the Kubernetes and Prometheus clients. If Prometheus is unavailable at startup, Rikugan still serves `diagnose_pod` — the Prometheus and Runes providers are simply skipped. The GitHub, GitLab, and Argo CD providers are independently optional — if their respective tokens are unset, they are skipped with a warning and the remaining providers continue to function. Multiple providers can be active simultaneously; the AI agent chooses the appropriate tool based on context.
+The correlation engine (Runes) depends on both the Kubernetes and Prometheus clients. If Prometheus is unavailable at startup, Rikugan still serves `diagnose_pod` — the Prometheus and Runes providers are simply skipped. The GitHub, GitLab, Argo CD, and Jaeger providers are independently optional — if their respective configuration is unset, they are skipped with a warning and the remaining providers continue to function. Multiple providers can be active simultaneously; the AI agent chooses the appropriate tool based on context.
 
 Core logic — query building, correlation heuristics, report generation — lives in pure functions decoupled from MCP transport. An alternative client (CLI, web, another agent framework) can import the providers directly and call `buildQueries()`, `correlate()`, or `fetchLogs()` without an MCP server.
 
@@ -169,6 +194,7 @@ Core logic — query building, correlation heuristics, report generation — liv
 - GitHub personal access token (optional, required for `get_recent_commits` and `get_commit_diff`)
 - GitLab personal access token (optional, required for `gitlab_get_recent_commits` and `gitlab_get_commit_diff`)
 - Argo CD server URL and API token (optional, required for `get_app_status` and `list_degraded_apps`)
+- Jaeger Query API URL (optional, required for `find_slow_traces` and `analyze_trace`)
 
 ### Build
 
@@ -194,9 +220,13 @@ GITLAB_TOKEN=glpat-... GITLAB_URL=https://gitlab.example.com ./rikugan
 # With Argo CD (deployment state)
 ARGOCD_SERVER=https://argocd.example.com ARGOCD_TOKEN=eyJ... ./rikugan
 
+# With Jaeger (trace analysis)
+JAEGER_URL=http://jaeger-query:16686 ./rikugan
+
 # All providers
 PROMETHEUS_URL=http://prometheus:9090 GITHUB_TOKEN=ghp_... GITLAB_TOKEN=glpat-... \
-  ARGOCD_SERVER=https://argocd.example.com ARGOCD_TOKEN=eyJ... ./rikugan
+  ARGOCD_SERVER=https://argocd.example.com ARGOCD_TOKEN=eyJ... \
+  JAEGER_URL=http://jaeger-query:16686 ./rikugan
 ```
 
 Rikugan reads its Kubernetes configuration from the standard chain: explicit path, `KUBECONFIG` env var, `~/.kube/config`, or in-cluster config.
@@ -240,7 +270,8 @@ Add to your Claude Desktop MCP configuration (`claude_desktop_config.json`):
         "GITLAB_TOKEN": "glpat-...",
         "GITLAB_URL": "https://gitlab.example.com",
         "ARGOCD_SERVER": "https://argocd.example.com",
-        "ARGOCD_TOKEN": "eyJ..."
+        "ARGOCD_TOKEN": "eyJ...",
+        "JAEGER_URL": "http://jaeger-query:16686"
       }
     }
   }
@@ -273,6 +304,10 @@ A pod starts crash-looping after a deployment. The agent calls `get_recent_commi
 
 An engineer asks: *"Is everything in sync?"* The agent calls `list_degraded_apps` to scan all Argo CD applications. Any app that is `OutOfSync` or `Degraded` is surfaced immediately. The agent can then call `get_app_status` on a specific app to get the full details — what repo it tracks, which revision it's targeting, and the sync error message — and suggest a remediation (manual sync, rollback, or code fix).
 
+### Latency Investigation
+
+A user reports that API responses are slow. The agent calls `find_slow_traces` for the `api-gateway` service with `min_duration: "2s"`. It finds several slow traces, then calls `analyze_trace` on the worst one. The report reveals that 80% of the trace duration is spent in a `db_query` span in the `payment-db` service, immediately pointing the team to a database query that needs optimization.
+
 ### Proactive Health Checks
 
 An agent on a scheduled loop calls `six_eyes` across key pods in a namespace. Healthy pods return an `INFO: HEALTHY` finding and are skipped. Any pod with warnings, restarts, or throttling gets flagged for review before it becomes an incident.
@@ -288,6 +323,7 @@ An agent on a scheduled loop calls `six_eyes` across key pods in a namespace. He
 | `GITLAB_URL` | GitLab instance URL | No (defaults to `https://gitlab.com`) |
 | `ARGOCD_SERVER` | Argo CD server URL (e.g. `https://argocd.example.com`) | No (Argo CD tools disabled if unset) |
 | `ARGOCD_TOKEN` | Argo CD API bearer token | No (Argo CD tools disabled if unset) |
+| `JAEGER_URL` | Jaeger Query API URL (e.g. `http://jaeger-query:16686`) | No (Jaeger tools disabled if unset) |
 | `RIKUGAN_LOG_LEVEL` | Log verbosity: `debug`, `info`, `warn`, `error` | No (defaults to `info`) |
 
 ## License

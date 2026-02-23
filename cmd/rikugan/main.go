@@ -19,6 +19,7 @@ import (
 	"github.com/Zuful/rikugan/internal/provider/argocd"
 	"github.com/Zuful/rikugan/internal/provider/github"
 	"github.com/Zuful/rikugan/internal/provider/gitlab"
+	"github.com/Zuful/rikugan/internal/provider/jaeger"
 	"github.com/Zuful/rikugan/internal/provider/kubernetes"
 	"github.com/Zuful/rikugan/internal/provider/prometheus"
 	"github.com/Zuful/rikugan/internal/provider/runes"
@@ -126,6 +127,18 @@ func run(logger *slog.Logger) error {
 		argoProv := argocd.NewFromClient(argoClient, argocd.WithLogger(logger))
 		if err := d.Register(argoProv); err != nil {
 			return fmt.Errorf("register argocd provider: %w", err)
+		}
+	}
+
+	jaegerClient, err := jaeger.BuildClient("")
+	if err != nil {
+		logger.Warn("jaeger provider not available, skipping",
+			slog.String("reason", err.Error()),
+		)
+	} else {
+		jaegerProv := jaeger.NewFromClient(jaegerClient, jaeger.WithLogger(logger))
+		if err := d.Register(jaegerProv); err != nil {
+			return fmt.Errorf("register jaeger provider: %w", err)
 		}
 	}
 
