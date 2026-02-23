@@ -1,6 +1,6 @@
 # Rikugan
 
-Rikugan is an MCP server that gives AI agents direct visibility into Kubernetes clusters, Prometheus metrics, code change history from GitHub and GitLab, Argo CD deployment state, and distributed traces from Jaeger. It exposes eleven tools — pod diagnostics, PromQL queries, a correlation engine, change intelligence, deployment status, and trace analysis — over the [Model Context Protocol](https://modelcontextprotocol.io), letting any MCP-compatible client diagnose incidents, correlate them with recent code changes, verify GitOps sync state, and pinpoint latency bottlenecks without switching between dashboards.
+Rikugan is an MCP server that gives AI agents direct visibility into Kubernetes clusters, Prometheus metrics, code change history from GitHub and GitLab, Argo CD deployment state, distributed traces from Jaeger, and runtime security events from Falco. It exposes thirteen tools — pod diagnostics, PromQL queries, a correlation engine, change intelligence, deployment status, trace analysis, and security audit — over the [Model Context Protocol](https://modelcontextprotocol.io), letting any MCP-compatible client diagnose incidents end-to-end without switching between dashboards.
 
 ## What is MCP?
 
@@ -155,16 +155,43 @@ Parses all spans in the trace, identifies the 3 slowest spans and any spans with
 - Ranked table of slowest spans with service, operation, duration, and percentage of total time
 - Error table listing any spans with error tags or log entries
 
+### `get_security_events`
+
+Fetches recent Falco security events from Falcosidekick with optional filtering.
+
+| Parameter   | Type   | Required | Description                                                          |
+|-------------|--------|----------|----------------------------------------------------------------------|
+| `namespace` | string | no       | Kubernetes namespace to filter events by                             |
+| `pod_name`  | string | no       | Pod name to filter events by                                         |
+| `severity`  | string | no       | Minimum severity: `Notice`, `Warning`, `Error`, `Critical` (default: `Warning`) |
+
+Returns a table of up to 50 events from the last 24 hours showing time, severity, rule name, and output message. Server-side filtering by priority, client-side filtering by namespace/pod.
+
+### `analyze_pod_audit`
+
+Analyzes Falco security events for a specific pod and returns a synthesized summary grouped by rule.
+
+| Parameter   | Type   | Required | Description                                 |
+|-------------|--------|----------|---------------------------------------------|
+| `pod_name`  | string | yes      | Pod name to analyze audit events for         |
+| `namespace` | string | no       | Kubernetes namespace (recommended for precision) |
+
+Instead of listing raw events, groups them by rule name (e.g. *"3x Terminal shell in container"*, *"1x Write below binary dir"*) and returns:
+- Total event count and unique rule count
+- Critical/Error event count highlighted
+- Grouped table sorted by severity then frequency, with first/last seen timestamps
+- Sample output message for each rule to give the LLM context
+
 ## Architecture
 
 ```
 ┌─────────────┐   stdin/stdout    ┌──────────────────────────────────────────┐
 │  MCP Client  │ ◄──── JSON-RPC ────► │            Rikugan MCP Server            │
 │  (AI Agent)  │                  │                                          │
-└─────────────┘                  │  ┌──────────┐ ┌──────────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐│
-                                 │  │Kubernetes│ │Prometheus│ │ GitHub │ │ GitLab │ │Argo CD │ │ Jaeger ││
-                                 │  │ Provider │ │ Provider │ │Provider│ │Provider│ │Provider│ │Provider││
-                                 │  └──────────┘ └──────────┘ └────────┘ └────────┘ └────────┘ └────────┘│
+└─────────────┘                  │  ┌──────────┐ ┌──────────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐│
+                                 │  │Kubernetes│ │Prometheus│ │ GitHub │ │ GitLab │ │Argo CD │ │ Jaeger │ │ Falco  ││
+                                 │  │ Provider │ │ Provider │ │Provider│ │Provider│ │Provider│ │Provider│ │Provider││
+                                 │  └──────────┘ └──────────┘ └────────┘ └────────┘ └────────┘ └────────┘ └────────┘│
                                  │  ┌──────────────────────────────────────┐│
                                  │  │          Runes Provider               ││
                                  │  │       (correlation engine)            ││
@@ -172,15 +199,15 @@ Parses all spans in the trace, identifies the 3 slowest spans and any spans with
                                  └──────────────────────────────────────────┘
                                         │                │              │
                                         ▼                ▼              ▼
-                                 ┌──────────┐ ┌──────────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐
-                                 │Kubernetes│ │Prometheus│ │ GitHub │ │ GitLab │ │Argo CD │ │ Jaeger │
-                                 │  API     │ │  API     │ │  API   │ │  API   │ │  API   │ │  API   │
-                                 └──────────┘ └──────────┘ └────────┘ └────────┘ └────────┘ └────────┘
+                                 ┌──────────┐ ┌──────────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌──────────────┐
+                                 │Kubernetes│ │Prometheus│ │ GitHub │ │ GitLab │ │Argo CD │ │ Jaeger │ │Falcosidekick│
+                                 │  API     │ │  API     │ │  API   │ │  API   │ │  API   │ │  API   │ │     API      │
+                                 └──────────┘ └──────────┘ └────────┘ └────────┘ └────────┘ └────────┘ └──────────────┘
 ```
 
 Providers are independent modules that register tools with a central dispatcher. The dispatcher wires each tool's schema and handler into the MCP server. Logging goes to stderr as structured JSON so it never interferes with the STDIO transport on stdout.
 
-The correlation engine (Runes) depends on both the Kubernetes and Prometheus clients. If Prometheus is unavailable at startup, Rikugan still serves `diagnose_pod` — the Prometheus and Runes providers are simply skipped. The GitHub, GitLab, Argo CD, and Jaeger providers are independently optional — if their respective configuration is unset, they are skipped with a warning and the remaining providers continue to function. Multiple providers can be active simultaneously; the AI agent chooses the appropriate tool based on context.
+The correlation engine (Runes) depends on both the Kubernetes and Prometheus clients. If Prometheus is unavailable at startup, Rikugan still serves `diagnose_pod` — the Prometheus and Runes providers are simply skipped. The GitHub, GitLab, Argo CD, Jaeger, and Falco providers are independently optional — if their respective configuration is unset, they are skipped with a warning and the remaining providers continue to function. Multiple providers can be active simultaneously; the AI agent chooses the appropriate tool based on context.
 
 Core logic — query building, correlation heuristics, report generation — lives in pure functions decoupled from MCP transport. An alternative client (CLI, web, another agent framework) can import the providers directly and call `buildQueries()`, `correlate()`, or `fetchLogs()` without an MCP server.
 
@@ -195,6 +222,7 @@ Core logic — query building, correlation heuristics, report generation — liv
 - GitLab personal access token (optional, required for `gitlab_get_recent_commits` and `gitlab_get_commit_diff`)
 - Argo CD server URL and API token (optional, required for `get_app_status` and `list_degraded_apps`)
 - Jaeger Query API URL (optional, required for `find_slow_traces` and `analyze_trace`)
+- Falcosidekick URL (optional, required for `get_security_events` and `analyze_pod_audit`)
 
 ### Build
 
@@ -223,10 +251,13 @@ ARGOCD_SERVER=https://argocd.example.com ARGOCD_TOKEN=eyJ... ./rikugan
 # With Jaeger (trace analysis)
 JAEGER_URL=http://jaeger-query:16686 ./rikugan
 
+# With Falco (runtime security audit)
+FALCO_URL=http://falcosidekick:2801 ./rikugan
+
 # All providers
 PROMETHEUS_URL=http://prometheus:9090 GITHUB_TOKEN=ghp_... GITLAB_TOKEN=glpat-... \
   ARGOCD_SERVER=https://argocd.example.com ARGOCD_TOKEN=eyJ... \
-  JAEGER_URL=http://jaeger-query:16686 ./rikugan
+  JAEGER_URL=http://jaeger-query:16686 FALCO_URL=http://falcosidekick:2801 ./rikugan
 ```
 
 Rikugan reads its Kubernetes configuration from the standard chain: explicit path, `KUBECONFIG` env var, `~/.kube/config`, or in-cluster config.
@@ -271,7 +302,8 @@ Add to your Claude Desktop MCP configuration (`claude_desktop_config.json`):
         "GITLAB_URL": "https://gitlab.example.com",
         "ARGOCD_SERVER": "https://argocd.example.com",
         "ARGOCD_TOKEN": "eyJ...",
-        "JAEGER_URL": "http://jaeger-query:16686"
+        "JAEGER_URL": "http://jaeger-query:16686",
+        "FALCO_URL": "http://falcosidekick:2801"
       }
     }
   }
@@ -308,6 +340,10 @@ An engineer asks: *"Is everything in sync?"* The agent calls `list_degraded_apps
 
 A user reports that API responses are slow. The agent calls `find_slow_traces` for the `api-gateway` service with `min_duration: "2s"`. It finds several slow traces, then calls `analyze_trace` on the worst one. The report reveals that 80% of the trace duration is spent in a `db_query` span in the `payment-db` service, immediately pointing the team to a database query that needs optimization.
 
+### Security Forensics
+
+A pod is behaving normally by all metrics but the team suspects compromise. The agent calls `analyze_pod_audit` on the pod. Falco reveals *"3x Terminal shell in container"* and *"1x Write below binary dir"* — someone exec'd into the container and modified a binary. The grouped summary immediately highlights the anomaly without flooding the context with hundreds of raw events.
+
 ### Proactive Health Checks
 
 An agent on a scheduled loop calls `six_eyes` across key pods in a namespace. Healthy pods return an `INFO: HEALTHY` finding and are skipped. Any pod with warnings, restarts, or throttling gets flagged for review before it becomes an incident.
@@ -324,6 +360,7 @@ An agent on a scheduled loop calls `six_eyes` across key pods in a namespace. He
 | `ARGOCD_SERVER` | Argo CD server URL (e.g. `https://argocd.example.com`) | No (Argo CD tools disabled if unset) |
 | `ARGOCD_TOKEN` | Argo CD API bearer token | No (Argo CD tools disabled if unset) |
 | `JAEGER_URL` | Jaeger Query API URL (e.g. `http://jaeger-query:16686`) | No (Jaeger tools disabled if unset) |
+| `FALCO_URL` | Falcosidekick URL (e.g. `http://falcosidekick:2801`) | No (Falco tools disabled if unset) |
 | `RIKUGAN_LOG_LEVEL` | Log verbosity: `debug`, `info`, `warn`, `error` | No (defaults to `info`) |
 
 ## License

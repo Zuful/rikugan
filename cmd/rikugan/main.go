@@ -17,6 +17,7 @@ import (
 
 	"github.com/Zuful/rikugan/internal/dispatcher"
 	"github.com/Zuful/rikugan/internal/provider/argocd"
+	"github.com/Zuful/rikugan/internal/provider/falco"
 	"github.com/Zuful/rikugan/internal/provider/github"
 	"github.com/Zuful/rikugan/internal/provider/gitlab"
 	"github.com/Zuful/rikugan/internal/provider/jaeger"
@@ -139,6 +140,18 @@ func run(logger *slog.Logger) error {
 		jaegerProv := jaeger.NewFromClient(jaegerClient, jaeger.WithLogger(logger))
 		if err := d.Register(jaegerProv); err != nil {
 			return fmt.Errorf("register jaeger provider: %w", err)
+		}
+	}
+
+	falcoClient, err := falco.BuildClient("")
+	if err != nil {
+		logger.Warn("falco provider not available, skipping",
+			slog.String("reason", err.Error()),
+		)
+	} else {
+		falcoProv := falco.NewFromClient(falcoClient, falco.WithLogger(logger))
+		if err := d.Register(falcoProv); err != nil {
+			return fmt.Errorf("register falco provider: %w", err)
 		}
 	}
 
