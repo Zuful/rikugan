@@ -1,14 +1,44 @@
 # Rikugan
 
-Rikugan is an MCP server that gives AI agents direct visibility into Kubernetes clusters, Prometheus metrics, code change history from GitHub and GitLab, Argo CD deployment state, distributed traces from Jaeger, and runtime security events from Falco. It exposes fifteen tools — pod diagnostics, cross-domain mapping, PromQL queries, a correlation engine, change intelligence, deployment status, trace analysis, and security audit — over the [Model Context Protocol](https://modelcontextprotocol.io), letting any MCP-compatible client diagnose incidents end-to-end without switching between dashboards.
+**Agentic DevOps for the AI-native era.**
+
+Rikugan is an MCP server that gives AI agents deep, multi-domain observability across your entire stack. It exposes fifteen tools — spanning Kubernetes diagnostics, Prometheus metrics, GitHub and GitLab change history, Argo CD deployment state, Jaeger distributed traces, and Falco runtime security — over the [Model Context Protocol](https://modelcontextprotocol.io). One binary, one config, six domains of perception.
+
+Instead of switching between dashboards, pasting logs into prompts, or writing glue scripts, your AI agent calls the right tool at the right time, correlates signals across domains, and delivers an end-to-end diagnosis in seconds.
 
 ## What is MCP?
 
 The Model Context Protocol is an open standard for connecting AI models to external tools and data sources. Instead of embedding API calls in prompts, MCP defines a structured interface where a server advertises tools with typed schemas, and a client (typically an AI agent) invokes them. Rikugan implements MCP over STDIO transport — it reads JSON-RPC from stdin and writes responses to stdout, making it easy to integrate with any MCP client.
 
+## The Six Eyes
+
+Rikugan's design philosophy is called **The Six Eyes** — six domains of perception that together give an AI agent complete situational awareness over a production system. Each Eye is an independent provider that opens a different lens on your infrastructure. When all six are active, the agent can trace a problem from a user-facing symptom through metrics, code changes, deployment state, request traces, and security events — without human intervention.
+
+| Eye | Domain | Provider | What It Sees |
+|-----|--------|----------|--------------|
+| :eye: **The Runtime Eye** | Kubernetes | `kubernetes` | Pod state, container logs, events, restarts, scheduling failures |
+| :chart_with_upwards_trend: **The Metrics Eye** | Prometheus | `prometheus` + `runes` | CPU, memory, throttling, OOM kills, node pressure — and the correlation engine that ties metrics to pod state |
+| :scroll: **The Change Eye** | GitHub / GitLab | `github`, `gitlab` | Recent commits, diffs, code provenance — what changed and when |
+| :rocket: **The Deployment Eye** | Argo CD | `argocd` | Sync status, health state, GitOps drift, rollout errors |
+| :mag: **The Trace Eye** | Jaeger | `jaeger` | Distributed traces, latency bottlenecks, cross-service error propagation |
+| :shield: **The Audit Eye** | Falco | `falco` | Runtime security events — shell access, binary modifications, privilege escalation |
+
+### Bridging the Domains
+
+Raw tools alone leave semantic gaps between domains. A Jaeger trace says `payment-service` is slow, but Kubernetes knows it as `payment-service-7b4f9c-x2k`. An image tag `a1b2c3d` might be a Git SHA, but only if someone connects the dots.
+
+Rikugan includes **bridge tools** that close these gaps:
+
+- **`find_pods_by_service_name`** — Translates a logical service name (from Jaeger, Argo CD, or a human) into concrete Kubernetes pod names via label matching and prefix fallback.
+- **`get_image_provenance`** — Extracts container image tags from a running pod and identifies Git SHAs, pointing the agent directly to `get_commit_diff` for the source code.
+
+These bridges are what turn isolated tools into a connected investigation graph.
+
 ## Tools
 
-### `diagnose_pod`
+### Kubernetes Provider
+
+#### `diagnose_pod`
 
 Collects everything you need to understand a pod's state in a single call: status, conditions, container states, recent events, and logs (including previous container logs when restarts have occurred).
 
@@ -24,7 +54,7 @@ Internally, the tool fetches the pod object first, then fans out to collect even
 - **Warning** — non-zero exit codes, waiting states
 - **CrashLoopBackOff** — restart loop detected
 
-### `find_pods_by_service_name`
+#### `find_pods_by_service_name`
 
 Bridges Jaeger service names to Kubernetes pod names. Finds pods that belong to a logical service.
 
@@ -35,7 +65,7 @@ Bridges Jaeger service names to Kubernetes pod names. Finds pods that belong to 
 
 Searches by common labels (`app`, `app.kubernetes.io/name`) first, then falls back to pod name prefix matching if no labels match. The report indicates which match method was used so the LLM knows the confidence level, and suggests next steps (`diagnose_pod` or `six_eyes`).
 
-### `get_image_provenance`
+#### `get_image_provenance`
 
 Bridges running pods to source code by extracting container image tags and identifying Git SHAs.
 
@@ -46,7 +76,9 @@ Bridges running pods to source code by extracting container image tags and ident
 
 Parses each container's image reference into registry, repository, and tag. If a tag matches a Git SHA pattern (7-40 hex characters), it's flagged and the report includes an explicit suggestion: *"To see the code: use `get_commit_diff` with `commit_sha: a1b2c3d`"*. Covers both regular and init containers.
 
-### `query_range`
+### Prometheus Provider
+
+#### `query_range`
 
 Executes a PromQL range query against Prometheus and returns formatted time-series data.
 
@@ -59,7 +91,9 @@ Executes a PromQL range query against Prometheus and returns formatted time-seri
 
 A data-point guard rejects queries that would return more than 10,000 samples, preventing excessive data transfer to the agent.
 
-### `six_eyes`
+### Runes Provider (Correlation Engine)
+
+#### `six_eyes`
 
 The correlation engine. Combines pod diagnostics with targeted Prometheus queries to produce a ranked diagnosis.
 
@@ -86,7 +120,9 @@ The correlation engine. Combines pod diagnostics with targeted Prometheus querie
 
 The report presents findings sorted by severity, followed by pod summary, events, and raw metric data for the agent to reason over.
 
-### `get_recent_commits`
+### GitHub Provider
+
+#### `get_recent_commits`
 
 Fetches the most recent commits from a GitHub repository. Useful for correlating code changes with runtime incidents.
 
@@ -98,7 +134,7 @@ Fetches the most recent commits from a GitHub repository. Useful for correlating
 
 Returns a Markdown table with the last 10 commits showing short SHA, author, date, and first line of the commit message.
 
-### `get_commit_diff`
+#### `get_commit_diff`
 
 Fetches the full diff for a specific commit, including per-file patches.
 
@@ -110,7 +146,9 @@ Fetches the full diff for a specific commit, including per-file patches.
 
 Returns commit metadata (SHA, author, date, message) followed by per-file diffs. Output is capped at 10,000 characters to avoid overwhelming the agent context — if the diff exceeds this limit it is truncated with a note indicating the total size.
 
-### `gitlab_get_recent_commits`
+### GitLab Provider
+
+#### `gitlab_get_recent_commits`
 
 Fetches the most recent commits from a GitLab project. Equivalent to `get_recent_commits` for GitLab-hosted repositories, including self-hosted instances.
 
@@ -121,7 +159,7 @@ Fetches the most recent commits from a GitLab project. Equivalent to `get_recent
 
 Returns a Markdown table with the last 10 commits showing short SHA, author, date, and commit title.
 
-### `gitlab_get_commit_diff`
+#### `gitlab_get_commit_diff`
 
 Fetches the full diff for a specific commit from a GitLab project.
 
@@ -132,7 +170,9 @@ Fetches the full diff for a specific commit from a GitLab project.
 
 Returns commit metadata followed by per-file diffs. Same 10,000-character truncation as the GitHub equivalent.
 
-### `get_app_status`
+### Argo CD Provider
+
+#### `get_app_status`
 
 Gets the sync and health status of an Argo CD application.
 
@@ -142,7 +182,7 @@ Gets the sync and health status of an Argo CD application.
 
 Returns a report with sync status (`Synced`, `OutOfSync`), health status (`Healthy`, `Degraded`, `Missing`), tracked repository, target revision, and the last operation details including any error messages.
 
-### `list_degraded_apps`
+#### `list_degraded_apps`
 
 Lists all Argo CD applications that are currently Degraded, Missing, or OutOfSync.
 
@@ -152,7 +192,9 @@ Lists all Argo CD applications that are currently Degraded, Missing, or OutOfSyn
 
 Returns a summary table of unhealthy applications with their sync status, health status, repository, and error messages. Useful for a quick health check across all GitOps deployments.
 
-### `find_slow_traces`
+### Jaeger Provider
+
+#### `find_slow_traces`
 
 Finds the most recent slow traces for a service from Jaeger.
 
@@ -163,7 +205,7 @@ Finds the most recent slow traces for a service from Jaeger.
 
 Returns a summary table of up to 5 traces with trace ID, start time, total duration, and span count. Searches a 24-hour lookback window.
 
-### `analyze_trace`
+#### `analyze_trace`
 
 Analyzes a Jaeger trace and returns a synthesized bottleneck report instead of raw span JSON.
 
@@ -177,7 +219,9 @@ Parses all spans in the trace, identifies the 3 slowest spans and any spans with
 - Ranked table of slowest spans with service, operation, duration, and percentage of total time
 - Error table listing any spans with error tags or log entries
 
-### `get_security_events`
+### Falco Provider
+
+#### `get_security_events`
 
 Fetches recent Falco security events from Falcosidekick with optional filtering.
 
@@ -189,7 +233,7 @@ Fetches recent Falco security events from Falcosidekick with optional filtering.
 
 Returns a table of up to 50 events from the last 24 hours showing time, severity, rule name, and output message. Server-side filtering by priority, client-side filtering by namespace/pod.
 
-### `analyze_pod_audit`
+#### `analyze_pod_audit`
 
 Analyzes Falco security events for a specific pod and returns a synthesized summary grouped by rule.
 
@@ -229,9 +273,9 @@ Instead of listing raw events, groups them by rule name (e.g. *"3x Terminal shel
 
 Providers are independent modules that register tools with a central dispatcher. The dispatcher wires each tool's schema and handler into the MCP server. Logging goes to stderr as structured JSON so it never interferes with the STDIO transport on stdout.
 
-The correlation engine (Runes) depends on both the Kubernetes and Prometheus clients. If Prometheus is unavailable at startup, Rikugan still serves `diagnose_pod` — the Prometheus and Runes providers are simply skipped. The GitHub, GitLab, Argo CD, Jaeger, and Falco providers are independently optional — if their respective configuration is unset, they are skipped with a warning and the remaining providers continue to function. Multiple providers can be active simultaneously; the AI agent chooses the appropriate tool based on context.
+The correlation engine (Runes) is the only compound tool — it calls both the Kubernetes and Prometheus APIs internally to produce a single correlated diagnosis. All other tools are intentionally isolated: each returns a self-contained report, and the AI agent acts as the orchestration layer, chaining tools together based on what it learns. This is by design — the LLM sees across all domains simultaneously and can make investigation decisions that no single tool could.
 
-Core logic — query building, correlation heuristics, report generation — lives in pure functions decoupled from MCP transport. An alternative client (CLI, web, another agent framework) can import the providers directly and call `buildQueries()`, `correlate()`, or `fetchLogs()` without an MCP server.
+Core logic — query building, correlation heuristics, report generation — lives in pure functions decoupled from MCP transport. An alternative client (CLI, web, another agent framework) can import the providers directly without an MCP server.
 
 ## Getting Started
 
@@ -239,12 +283,8 @@ Core logic — query building, correlation heuristics, report generation — liv
 
 - Go 1.25+
 - Access to a Kubernetes cluster (kubeconfig or in-cluster)
-- Prometheus instance (optional, required for `query_range` and `six_eyes`)
-- GitHub personal access token (optional, required for `get_recent_commits` and `get_commit_diff`)
-- GitLab personal access token (optional, required for `gitlab_get_recent_commits` and `gitlab_get_commit_diff`)
-- Argo CD server URL and API token (optional, required for `get_app_status` and `list_degraded_apps`)
-- Jaeger Query API URL (optional, required for `find_slow_traces` and `analyze_trace`)
-- Falcosidekick URL (optional, required for `get_security_events` and `analyze_pod_audit`)
+
+All other providers are optional. Enable them by setting their environment variables.
 
 ### Build
 
@@ -255,31 +295,35 @@ go build -o rikugan ./cmd/rikugan
 ### Run
 
 ```sh
-# Kubernetes only (diagnose_pod available)
+# Kubernetes only (diagnose_pod, find_pods_by_service_name, get_image_provenance)
 ./rikugan
 
-# With Prometheus (query_range and six_eyes available)
+# With Prometheus (adds query_range and six_eyes correlation engine)
 PROMETHEUS_URL=http://prometheus:9090 ./rikugan
 
-# With GitHub (change intelligence available)
+# With GitHub change intelligence
 GITHUB_TOKEN=ghp_... ./rikugan
 
-# With GitLab (self-hosted instance)
+# With GitLab (supports self-hosted instances)
 GITLAB_TOKEN=glpat-... GITLAB_URL=https://gitlab.example.com ./rikugan
 
-# With Argo CD (deployment state)
+# With Argo CD deployment state
 ARGOCD_SERVER=https://argocd.example.com ARGOCD_TOKEN=eyJ... ./rikugan
 
-# With Jaeger (trace analysis)
+# With Jaeger trace analysis
 JAEGER_URL=http://jaeger-query:16686 ./rikugan
 
-# With Falco (runtime security audit)
+# With Falco runtime security
 FALCO_URL=http://falcosidekick:2801 ./rikugan
 
-# All providers
-PROMETHEUS_URL=http://prometheus:9090 GITHUB_TOKEN=ghp_... GITLAB_TOKEN=glpat-... \
+# All Six Eyes open
+PROMETHEUS_URL=http://prometheus:9090 \
+  GITHUB_TOKEN=ghp_... \
+  GITLAB_TOKEN=glpat-... GITLAB_URL=https://gitlab.example.com \
   ARGOCD_SERVER=https://argocd.example.com ARGOCD_TOKEN=eyJ... \
-  JAEGER_URL=http://jaeger-query:16686 FALCO_URL=http://falcosidekick:2801 ./rikugan
+  JAEGER_URL=http://jaeger-query:16686 \
+  FALCO_URL=http://falcosidekick:2801 \
+  ./rikugan
 ```
 
 Rikugan reads its Kubernetes configuration from the standard chain: explicit path, `KUBECONFIG` env var, `~/.kube/config`, or in-cluster config.
@@ -332,6 +376,8 @@ Add to your Claude Desktop MCP configuration (`claude_desktop_config.json`):
 }
 ```
 
+> **Graceful by design.** Every environment variable above except `KUBECONFIG` is optional. If a token or URL is missing, Rikugan closes that Eye and continues with the rest. Set only what you have — you can start with just Kubernetes and open more Eyes as your stack grows. The server logs which providers were activated and which were skipped at startup, so you always know exactly what's available.
+
 ## Use Cases
 
 ### Incident Triage
@@ -352,7 +398,7 @@ A deployment is stuck — pods won't schedule. The agent calls `six_eyes`, which
 
 ### Change Correlation
 
-A pod starts crash-looping after a deployment. The agent calls `get_recent_commits` (or `gitlab_get_recent_commits`) on the service's repository to see what changed, then uses the corresponding diff tool to inspect the suspicious commit. Combined with `six_eyes`, it can correlate the crash reason (e.g. OOMKill) with a specific code change (e.g. a removed memory limit or a new unbounded cache) and point the engineer directly to the relevant diff.
+A pod starts crash-looping after a deployment. The agent calls `get_image_provenance` to extract the container image tag, recognises it as a Git SHA, and calls `get_commit_diff` to inspect the code change. Combined with `six_eyes`, it can correlate the crash reason (e.g. OOMKill) with a specific code change (e.g. a removed memory limit or a new unbounded cache) and point the engineer directly to the relevant diff.
 
 ### GitOps Drift Detection
 
@@ -360,7 +406,7 @@ An engineer asks: *"Is everything in sync?"* The agent calls `list_degraded_apps
 
 ### Latency Investigation
 
-A user reports that API responses are slow. The agent calls `find_slow_traces` for the `api-gateway` service with `min_duration: "2s"`. It finds several slow traces, then calls `analyze_trace` on the worst one. The report reveals that 80% of the trace duration is spent in a `db_query` span in the `payment-db` service, immediately pointing the team to a database query that needs optimization.
+A user reports that API responses are slow. The agent calls `find_slow_traces` for the `api-gateway` service with `min_duration: "2s"`. It finds several slow traces, then calls `analyze_trace` on the worst one. The report reveals that 80% of the trace duration is spent in a `db_query` span in the `payment-db` service. The agent then calls `find_pods_by_service_name` to locate the `payment-db` pods and `diagnose_pod` to check their state — completing the investigation across three domains in seconds.
 
 ### Security Forensics
 
