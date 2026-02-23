@@ -16,6 +16,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 
 	"github.com/Zuful/rikugan/internal/dispatcher"
+	"github.com/Zuful/rikugan/internal/provider/argocd"
 	"github.com/Zuful/rikugan/internal/provider/github"
 	"github.com/Zuful/rikugan/internal/provider/gitlab"
 	"github.com/Zuful/rikugan/internal/provider/kubernetes"
@@ -113,6 +114,18 @@ func run(logger *slog.Logger) error {
 		glProv := gitlab.NewFromClient(glClient, gitlab.WithLogger(logger))
 		if err := d.Register(glProv); err != nil {
 			return fmt.Errorf("register gitlab provider: %w", err)
+		}
+	}
+
+	argoClient, err := argocd.BuildClient("", "")
+	if err != nil {
+		logger.Warn("argocd provider not available, skipping",
+			slog.String("reason", err.Error()),
+		)
+	} else {
+		argoProv := argocd.NewFromClient(argoClient, argocd.WithLogger(logger))
+		if err := d.Register(argoProv); err != nil {
+			return fmt.Errorf("register argocd provider: %w", err)
 		}
 	}
 

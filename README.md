@@ -1,6 +1,6 @@
 # Rikugan
 
-Rikugan is an MCP server that gives AI agents direct visibility into Kubernetes clusters, Prometheus metrics, and code change history from GitHub and GitLab. It exposes seven tools — pod diagnostics, PromQL queries, a correlation engine, and change intelligence — over the [Model Context Protocol](https://modelcontextprotocol.io), letting any MCP-compatible client diagnose incidents and correlate them with recent code changes without switching between dashboards.
+Rikugan is an MCP server that gives AI agents direct visibility into Kubernetes clusters, Prometheus metrics, code change history from GitHub and GitLab, and Argo CD deployment state. It exposes nine tools — pod diagnostics, PromQL queries, a correlation engine, change intelligence, and deployment status — over the [Model Context Protocol](https://modelcontextprotocol.io), letting any MCP-compatible client diagnose incidents, correlate them with recent code changes, and verify GitOps sync state without switching between dashboards.
 
 ## What is MCP?
 
@@ -110,16 +110,36 @@ Fetches the full diff for a specific commit from a GitLab project.
 
 Returns commit metadata followed by per-file diffs. Same 10,000-character truncation as the GitHub equivalent.
 
+### `get_app_status`
+
+Gets the sync and health status of an Argo CD application.
+
+| Parameter  | Type   | Required | Description                      |
+|------------|--------|----------|----------------------------------|
+| `app_name` | string | yes      | Name of the Argo CD application  |
+
+Returns a report with sync status (`Synced`, `OutOfSync`), health status (`Healthy`, `Degraded`, `Missing`), tracked repository, target revision, and the last operation details including any error messages.
+
+### `list_degraded_apps`
+
+Lists all Argo CD applications that are currently Degraded, Missing, or OutOfSync.
+
+| Parameter | Type   | Required | Description                                          |
+|-----------|--------|----------|------------------------------------------------------|
+| `project` | string | no       | Argo CD project name to filter by (default: all)     |
+
+Returns a summary table of unhealthy applications with their sync status, health status, repository, and error messages. Useful for a quick health check across all GitOps deployments.
+
 ## Architecture
 
 ```
 ┌─────────────┐   stdin/stdout    ┌──────────────────────────────────────────┐
 │  MCP Client  │ ◄──── JSON-RPC ────► │            Rikugan MCP Server            │
 │  (AI Agent)  │                  │                                          │
-└─────────────┘                  │  ┌────────────┐ ┌────────────┐ ┌────────┐ ┌────────┐│
-                                 │  │ Kubernetes  │ │ Prometheus │ │ GitHub │ │ GitLab ││
-                                 │  │  Provider   │ │  Provider  │ │Provider│ │Provider││
-                                 │  └────────────┘ └────────────┘ └────────┘ └────────┘│
+└─────────────┘                  │  ┌──────────┐ ┌──────────┐ ┌────────┐ ┌────────┐ ┌────────┐│
+                                 │  │Kubernetes│ │Prometheus│ │ GitHub │ │ GitLab │ │Argo CD ││
+                                 │  │ Provider │ │ Provider │ │Provider│ │Provider│ │Provider││
+                                 │  └──────────┘ └──────────┘ └────────┘ └────────┘ └────────┘│
                                  │  ┌──────────────────────────────────────┐│
                                  │  │          Runes Provider               ││
                                  │  │       (correlation engine)            ││
@@ -127,15 +147,15 @@ Returns commit metadata followed by per-file diffs. Same 10,000-character trunca
                                  └──────────────────────────────────────────┘
                                         │                │              │
                                         ▼                ▼              ▼
-                                 ┌────────────┐  ┌─────────────┐ ┌──────────┐ ┌──────────┐
-                                 │ Kubernetes  │  │ Prometheus  │ │  GitHub  │ │  GitLab  │
-                                 │   API       │  │   API       │ │   API    │ │   API    │
-                                 └────────────┘  └─────────────┘ └──────────┘ └──────────┘
+                                 ┌──────────┐ ┌──────────┐ ┌────────┐ ┌────────┐ ┌────────┐
+                                 │Kubernetes│ │Prometheus│ │ GitHub │ │ GitLab │ │Argo CD │
+                                 │  API     │ │  API     │ │  API   │ │  API   │ │  API   │
+                                 └──────────┘ └──────────┘ └────────┘ └────────┘ └────────┘
 ```
 
 Providers are independent modules that register tools with a central dispatcher. The dispatcher wires each tool's schema and handler into the MCP server. Logging goes to stderr as structured JSON so it never interferes with the STDIO transport on stdout.
 
-The correlation engine (Runes) depends on both the Kubernetes and Prometheus clients. If Prometheus is unavailable at startup, Rikugan still serves `diagnose_pod` — the Prometheus and Runes providers are simply skipped. The GitHub and GitLab providers are independently optional — if their respective tokens are unset, they are skipped with a warning and the remaining providers continue to function. Both can be active simultaneously; the AI agent chooses the appropriate tool based on where the user's code is hosted.
+The correlation engine (Runes) depends on both the Kubernetes and Prometheus clients. If Prometheus is unavailable at startup, Rikugan still serves `diagnose_pod` — the Prometheus and Runes providers are simply skipped. The GitHub, GitLab, and Argo CD providers are independently optional — if their respective tokens are unset, they are skipped with a warning and the remaining providers continue to function. Multiple providers can be active simultaneously; the AI agent chooses the appropriate tool based on context.
 
 Core logic — query building, correlation heuristics, report generation — lives in pure functions decoupled from MCP transport. An alternative client (CLI, web, another agent framework) can import the providers directly and call `buildQueries()`, `correlate()`, or `fetchLogs()` without an MCP server.
 
@@ -148,6 +168,7 @@ Core logic — query building, correlation heuristics, report generation — liv
 - Prometheus instance (optional, required for `query_range` and `six_eyes`)
 - GitHub personal access token (optional, required for `get_recent_commits` and `get_commit_diff`)
 - GitLab personal access token (optional, required for `gitlab_get_recent_commits` and `gitlab_get_commit_diff`)
+- Argo CD server URL and API token (optional, required for `get_app_status` and `list_degraded_apps`)
 
 ### Build
 
@@ -170,8 +191,12 @@ GITHUB_TOKEN=ghp_... ./rikugan
 # With GitLab (self-hosted instance)
 GITLAB_TOKEN=glpat-... GITLAB_URL=https://gitlab.example.com ./rikugan
 
+# With Argo CD (deployment state)
+ARGOCD_SERVER=https://argocd.example.com ARGOCD_TOKEN=eyJ... ./rikugan
+
 # All providers
-PROMETHEUS_URL=http://prometheus:9090 GITHUB_TOKEN=ghp_... GITLAB_TOKEN=glpat-... ./rikugan
+PROMETHEUS_URL=http://prometheus:9090 GITHUB_TOKEN=ghp_... GITLAB_TOKEN=glpat-... \
+  ARGOCD_SERVER=https://argocd.example.com ARGOCD_TOKEN=eyJ... ./rikugan
 ```
 
 Rikugan reads its Kubernetes configuration from the standard chain: explicit path, `KUBECONFIG` env var, `~/.kube/config`, or in-cluster config.
@@ -213,7 +238,9 @@ Add to your Claude Desktop MCP configuration (`claude_desktop_config.json`):
         "PROMETHEUS_URL": "http://localhost:9090",
         "GITHUB_TOKEN": "ghp_...",
         "GITLAB_TOKEN": "glpat-...",
-        "GITLAB_URL": "https://gitlab.example.com"
+        "GITLAB_URL": "https://gitlab.example.com",
+        "ARGOCD_SERVER": "https://argocd.example.com",
+        "ARGOCD_TOKEN": "eyJ..."
       }
     }
   }
@@ -242,6 +269,10 @@ A deployment is stuck — pods won't schedule. The agent calls `six_eyes`, which
 
 A pod starts crash-looping after a deployment. The agent calls `get_recent_commits` (or `gitlab_get_recent_commits`) on the service's repository to see what changed, then uses the corresponding diff tool to inspect the suspicious commit. Combined with `six_eyes`, it can correlate the crash reason (e.g. OOMKill) with a specific code change (e.g. a removed memory limit or a new unbounded cache) and point the engineer directly to the relevant diff.
 
+### GitOps Drift Detection
+
+An engineer asks: *"Is everything in sync?"* The agent calls `list_degraded_apps` to scan all Argo CD applications. Any app that is `OutOfSync` or `Degraded` is surfaced immediately. The agent can then call `get_app_status` on a specific app to get the full details — what repo it tracks, which revision it's targeting, and the sync error message — and suggest a remediation (manual sync, rollback, or code fix).
+
 ### Proactive Health Checks
 
 An agent on a scheduled loop calls `six_eyes` across key pods in a namespace. Healthy pods return an `INFO: HEALTHY` finding and are skipped. Any pod with warnings, restarts, or throttling gets flagged for review before it becomes an incident.
@@ -255,6 +286,8 @@ An agent on a scheduled loop calls `six_eyes` across key pods in a namespace. He
 | `GITHUB_TOKEN` | GitHub personal access token | No (GitHub tools disabled if unset) |
 | `GITLAB_TOKEN` | GitLab personal access token | No (GitLab tools disabled if unset) |
 | `GITLAB_URL` | GitLab instance URL | No (defaults to `https://gitlab.com`) |
+| `ARGOCD_SERVER` | Argo CD server URL (e.g. `https://argocd.example.com`) | No (Argo CD tools disabled if unset) |
+| `ARGOCD_TOKEN` | Argo CD API bearer token | No (Argo CD tools disabled if unset) |
 | `RIKUGAN_LOG_LEVEL` | Log verbosity: `debug`, `info`, `warn`, `error` | No (defaults to `info`) |
 
 ## License
