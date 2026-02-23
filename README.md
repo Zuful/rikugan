@@ -1,6 +1,6 @@
 # Rikugan
 
-Rikugan is an MCP server that gives AI agents direct visibility into Kubernetes clusters, Prometheus metrics, and GitHub change history. It exposes five tools — pod diagnostics, PromQL queries, a correlation engine, and change intelligence — over the [Model Context Protocol](https://modelcontextprotocol.io), letting any MCP-compatible client diagnose incidents and correlate them with recent code changes without switching between dashboards.
+Rikugan is an MCP server that gives AI agents direct visibility into Kubernetes clusters, Prometheus metrics, and code change history from GitHub and GitLab. It exposes seven tools — pod diagnostics, PromQL queries, a correlation engine, and change intelligence — over the [Model Context Protocol](https://modelcontextprotocol.io), letting any MCP-compatible client diagnose incidents and correlate them with recent code changes without switching between dashboards.
 
 ## What is MCP?
 
@@ -88,16 +88,38 @@ Fetches the full diff for a specific commit, including per-file patches.
 
 Returns commit metadata (SHA, author, date, message) followed by per-file diffs. Output is capped at 10,000 characters to avoid overwhelming the agent context — if the diff exceeds this limit it is truncated with a note indicating the total size.
 
+### `gitlab_get_recent_commits`
+
+Fetches the most recent commits from a GitLab project. Equivalent to `get_recent_commits` for GitLab-hosted repositories, including self-hosted instances.
+
+| Parameter    | Type   | Required | Description                                                        |
+|--------------|--------|----------|--------------------------------------------------------------------|
+| `project_id` | string | yes      | GitLab project ID (numeric) or URL-encoded path (e.g. `group/project`) |
+| `branch`     | string | no       | Branch name (default: `main`)                                      |
+
+Returns a Markdown table with the last 10 commits showing short SHA, author, date, and commit title.
+
+### `gitlab_get_commit_diff`
+
+Fetches the full diff for a specific commit from a GitLab project.
+
+| Parameter    | Type   | Required | Description                                                        |
+|--------------|--------|----------|--------------------------------------------------------------------|
+| `project_id` | string | yes      | GitLab project ID (numeric) or URL-encoded path (e.g. `group/project`) |
+| `commit_sha` | string | yes      | Full or abbreviated commit SHA                                     |
+
+Returns commit metadata followed by per-file diffs. Same 10,000-character truncation as the GitHub equivalent.
+
 ## Architecture
 
 ```
 ┌─────────────┐   stdin/stdout    ┌──────────────────────────────────────────┐
 │  MCP Client  │ ◄──── JSON-RPC ────► │            Rikugan MCP Server            │
 │  (AI Agent)  │                  │                                          │
-└─────────────┘                  │  ┌────────────┐ ┌────────────┐ ┌────────┐│
-                                 │  │ Kubernetes  │ │ Prometheus │ │ GitHub ││
-                                 │  │  Provider   │ │  Provider  │ │Provider││
-                                 │  └────────────┘ └────────────┘ └────────┘│
+└─────────────┘                  │  ┌────────────┐ ┌────────────┐ ┌────────┐ ┌────────┐│
+                                 │  │ Kubernetes  │ │ Prometheus │ │ GitHub │ │ GitLab ││
+                                 │  │  Provider   │ │  Provider  │ │Provider│ │Provider││
+                                 │  └────────────┘ └────────────┘ └────────┘ └────────┘│
                                  │  ┌──────────────────────────────────────┐│
                                  │  │          Runes Provider               ││
                                  │  │       (correlation engine)            ││
@@ -105,15 +127,15 @@ Returns commit metadata (SHA, author, date, message) followed by per-file diffs.
                                  └──────────────────────────────────────────┘
                                         │                │              │
                                         ▼                ▼              ▼
-                                 ┌────────────┐  ┌─────────────┐ ┌──────────┐
-                                 │ Kubernetes  │  │ Prometheus  │ │  GitHub  │
-                                 │   API       │  │   API       │ │   API    │
-                                 └────────────┘  └─────────────┘ └──────────┘
+                                 ┌────────────┐  ┌─────────────┐ ┌──────────┐ ┌──────────┐
+                                 │ Kubernetes  │  │ Prometheus  │ │  GitHub  │ │  GitLab  │
+                                 │   API       │  │   API       │ │   API    │ │   API    │
+                                 └────────────┘  └─────────────┘ └──────────┘ └──────────┘
 ```
 
 Providers are independent modules that register tools with a central dispatcher. The dispatcher wires each tool's schema and handler into the MCP server. Logging goes to stderr as structured JSON so it never interferes with the STDIO transport on stdout.
 
-The correlation engine (Runes) depends on both the Kubernetes and Prometheus clients. If Prometheus is unavailable at startup, Rikugan still serves `diagnose_pod` — the Prometheus and Runes providers are simply skipped. The GitHub provider is independently optional — if `GITHUB_TOKEN` is unset, it is skipped with a warning and the remaining providers continue to function.
+The correlation engine (Runes) depends on both the Kubernetes and Prometheus clients. If Prometheus is unavailable at startup, Rikugan still serves `diagnose_pod` — the Prometheus and Runes providers are simply skipped. The GitHub and GitLab providers are independently optional — if their respective tokens are unset, they are skipped with a warning and the remaining providers continue to function. Both can be active simultaneously; the AI agent chooses the appropriate tool based on where the user's code is hosted.
 
 Core logic — query building, correlation heuristics, report generation — lives in pure functions decoupled from MCP transport. An alternative client (CLI, web, another agent framework) can import the providers directly and call `buildQueries()`, `correlate()`, or `fetchLogs()` without an MCP server.
 
@@ -125,6 +147,7 @@ Core logic — query building, correlation heuristics, report generation — liv
 - Access to a Kubernetes cluster (kubeconfig or in-cluster)
 - Prometheus instance (optional, required for `query_range` and `six_eyes`)
 - GitHub personal access token (optional, required for `get_recent_commits` and `get_commit_diff`)
+- GitLab personal access token (optional, required for `gitlab_get_recent_commits` and `gitlab_get_commit_diff`)
 
 ### Build
 
@@ -144,8 +167,11 @@ PROMETHEUS_URL=http://prometheus:9090 ./rikugan
 # With GitHub (change intelligence available)
 GITHUB_TOKEN=ghp_... ./rikugan
 
+# With GitLab (self-hosted instance)
+GITLAB_TOKEN=glpat-... GITLAB_URL=https://gitlab.example.com ./rikugan
+
 # All providers
-PROMETHEUS_URL=http://prometheus:9090 GITHUB_TOKEN=ghp_... ./rikugan
+PROMETHEUS_URL=http://prometheus:9090 GITHUB_TOKEN=ghp_... GITLAB_TOKEN=glpat-... ./rikugan
 ```
 
 Rikugan reads its Kubernetes configuration from the standard chain: explicit path, `KUBECONFIG` env var, `~/.kube/config`, or in-cluster config.
@@ -185,7 +211,9 @@ Add to your Claude Desktop MCP configuration (`claude_desktop_config.json`):
       "env": {
         "KUBECONFIG": "/path/to/.kube/config",
         "PROMETHEUS_URL": "http://localhost:9090",
-        "GITHUB_TOKEN": "ghp_..."
+        "GITHUB_TOKEN": "ghp_...",
+        "GITLAB_TOKEN": "glpat-...",
+        "GITLAB_URL": "https://gitlab.example.com"
       }
     }
   }
@@ -212,7 +240,7 @@ A deployment is stuck — pods won't schedule. The agent calls `six_eyes`, which
 
 ### Change Correlation
 
-A pod starts crash-looping after a deployment. The agent calls `get_recent_commits` on the service's repository to see what changed, then uses `get_commit_diff` to inspect the suspicious commit. Combined with `six_eyes`, it can correlate the crash reason (e.g. OOMKill) with a specific code change (e.g. a removed memory limit or a new unbounded cache) and point the engineer directly to the relevant diff.
+A pod starts crash-looping after a deployment. The agent calls `get_recent_commits` (or `gitlab_get_recent_commits`) on the service's repository to see what changed, then uses the corresponding diff tool to inspect the suspicious commit. Combined with `six_eyes`, it can correlate the crash reason (e.g. OOMKill) with a specific code change (e.g. a removed memory limit or a new unbounded cache) and point the engineer directly to the relevant diff.
 
 ### Proactive Health Checks
 
@@ -225,6 +253,8 @@ An agent on a scheduled loop calls `six_eyes` across key pods in a namespace. He
 | `KUBECONFIG` | Path to kubeconfig file | No (falls back to `~/.kube/config` or in-cluster) |
 | `PROMETHEUS_URL` | Prometheus server URL | No (Prometheus and Runes tools disabled if unset) |
 | `GITHUB_TOKEN` | GitHub personal access token | No (GitHub tools disabled if unset) |
+| `GITLAB_TOKEN` | GitLab personal access token | No (GitLab tools disabled if unset) |
+| `GITLAB_URL` | GitLab instance URL | No (defaults to `https://gitlab.com`) |
 | `RIKUGAN_LOG_LEVEL` | Log verbosity: `debug`, `info`, `warn`, `error` | No (defaults to `info`) |
 
 ## License

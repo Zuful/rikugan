@@ -17,6 +17,7 @@ import (
 
 	"github.com/Zuful/rikugan/internal/dispatcher"
 	"github.com/Zuful/rikugan/internal/provider/github"
+	"github.com/Zuful/rikugan/internal/provider/gitlab"
 	"github.com/Zuful/rikugan/internal/provider/kubernetes"
 	"github.com/Zuful/rikugan/internal/provider/prometheus"
 	"github.com/Zuful/rikugan/internal/provider/runes"
@@ -100,6 +101,18 @@ func run(logger *slog.Logger) error {
 		ghProv := github.NewFromClient(ghClient, github.WithLogger(logger))
 		if err := d.Register(ghProv); err != nil {
 			return fmt.Errorf("register github provider: %w", err)
+		}
+	}
+
+	glClient, err := gitlab.BuildClient("", "")
+	if err != nil {
+		logger.Warn("gitlab provider not available, skipping",
+			slog.String("reason", err.Error()),
+		)
+	} else {
+		glProv := gitlab.NewFromClient(glClient, gitlab.WithLogger(logger))
+		if err := d.Register(glProv); err != nil {
+			return fmt.Errorf("register gitlab provider: %w", err)
 		}
 	}
 
