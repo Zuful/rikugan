@@ -2,7 +2,7 @@
 
 **Agentic DevOps for the AI-native era.**
 
-Rikugan is an MCP server that gives AI agents deep, multi-domain observability across your entire stack. It exposes fifteen tools — spanning Kubernetes diagnostics, Prometheus metrics, GitHub and GitLab change history, Argo CD deployment state, Jaeger distributed traces, and Falco runtime security — over the [Model Context Protocol](https://modelcontextprotocol.io). One binary, one config, six domains of perception.
+Rikugan is an MCP server that gives AI agents deep, multi-domain observability across your entire stack. It exposes eighteen tools — spanning Kubernetes diagnostics, Prometheus metrics, GitHub and GitLab change history, Argo CD deployment state, Jaeger distributed traces, Falco runtime security, and Loki centralized log search — over the [Model Context Protocol](https://modelcontextprotocol.io). One binary, one config, seven domains of perception.
 
 Instead of switching between dashboards, pasting logs into prompts, or writing glue scripts, your AI agent calls the right tool at the right time, correlates signals across domains, and delivers an end-to-end diagnosis in seconds.
 
@@ -10,9 +10,9 @@ Instead of switching between dashboards, pasting logs into prompts, or writing g
 
 The Model Context Protocol is an open standard for connecting AI models to external tools and data sources. Instead of embedding API calls in prompts, MCP defines a structured interface where a server advertises tools with typed schemas, and a client (typically an AI agent) invokes them. Rikugan implements MCP over STDIO transport — it reads JSON-RPC from stdin and writes responses to stdout, making it easy to integrate with any MCP client.
 
-## The Six Eyes
+## The Seven Eyes
 
-Rikugan's design philosophy is called **The Six Eyes** — six domains of perception that together give an AI agent complete situational awareness over a production system. Each Eye is an independent provider that opens a different lens on your infrastructure. When all six are active, the agent can trace a problem from a user-facing symptom through metrics, code changes, deployment state, request traces, and security events — without human intervention.
+Rikugan's design philosophy is called **The Seven Eyes** — seven domains of perception that together give an AI agent complete situational awareness over a production system. Each Eye is an independent provider that opens a different lens on your infrastructure. When all seven are active, the agent can trace a problem from a user-facing symptom through metrics, code changes, deployment state, request traces, security events, and centralized logs — without human intervention.
 
 | Eye | Domain | Provider | What It Sees |
 |-----|--------|----------|--------------|
@@ -22,6 +22,7 @@ Rikugan's design philosophy is called **The Six Eyes** — six domains of percep
 | :rocket: **The Deployment Eye** | Argo CD | `argocd` | Sync status, health state, GitOps drift, rollout errors |
 | :mag: **The Trace Eye** | Jaeger | `jaeger` | Distributed traces, latency bottlenecks, cross-service error propagation |
 | :shield: **The Audit Eye** | Falco | `falco` | Runtime security events — shell access, binary modifications, privilege escalation |
+| :bookmark_tabs: **The Log Eye** | Loki | `loki` | Log search, contextual retrieval, anomaly detection |
 
 ### Bridging the Domains
 
@@ -248,6 +249,46 @@ Instead of listing raw events, groups them by rule name (e.g. *"3x Terminal shel
 - Grouped table sorted by severity then frequency, with first/last seen timestamps
 - Sample output message for each rule to give the LLM context
 
+### Loki Provider
+
+#### `search_logs`
+
+Searches logs in Loki using a LogQL expression. Returns matching log lines with timestamps and stream labels.
+
+| Parameter | Type   | Required | Description                                      |
+|-----------|--------|----------|--------------------------------------------------|
+| `query`   | string | yes      | LogQL expression (e.g. `{app="payment-service"} |= "error"`) |
+| `start`   | string | no       | Start time in RFC3339 format (default: 1 hour ago) |
+| `end`     | string | no       | End time in RFC3339 format (default: now)        |
+| `limit`   | number | no       | Maximum log lines to return (default: 100, max: 500) |
+
+Returns a Markdown table of log lines with timestamp, stream labels, and the log line (truncated at 200 characters). Results are sorted newest-first.
+
+#### `get_log_context`
+
+Retrieves logs surrounding a specific timestamp for a service. This is a bridge tool — use it when you find a timestamp from a trace or event and want the surrounding log lines for context.
+
+| Parameter   | Type   | Required | Description                                     |
+|-------------|--------|----------|-------------------------------------------------|
+| `service`   | string | yes      | Service name (used as the `app` label in LogQL) |
+| `namespace` | string | no       | Kubernetes namespace to scope the query         |
+| `timestamp` | string | yes      | Center timestamp in RFC3339 format              |
+| `window`    | string | no       | Time window around the timestamp (e.g. `5m`, `10m`). Default: `5m` |
+
+Returns a metadata header with service, namespace, center timestamp, and window, followed by a table of log lines in the window.
+
+#### `detect_log_anomalies`
+
+Analyzes recent logs for a service and detects anomalies. Classifies log lines by level, counts error/warning rates, and groups error messages by normalized pattern.
+
+| Parameter   | Type   | Required | Description                                     |
+|-------------|--------|----------|-------------------------------------------------|
+| `service`   | string | yes      | Service name (used as the `app` label in LogQL) |
+| `namespace` | string | no       | Kubernetes namespace to scope the query         |
+| `duration`  | string | no       | Lookback duration (e.g. `1h`, `30m`). Default: `1h` |
+
+Returns a level distribution table (ERROR, WARN, INFO, DEBUG counts and percentages), a summary sentence, top error patterns grouped by normalized message (timestamps, UUIDs, and numbers stripped), and sample error lines. Analysis is based on up to 1000 most recent lines.
+
 ## Architecture
 
 ```
@@ -255,9 +296,9 @@ Instead of listing raw events, groups them by rule name (e.g. *"3x Terminal shel
 │  MCP Client  │ ◄──── JSON-RPC ────► │            Rikugan MCP Server            │
 │  (AI Agent)  │                  │                                          │
 └─────────────┘                  │  ┌──────────┐ ┌──────────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐│
-                                 │  │Kubernetes│ │Prometheus│ │ GitHub │ │ GitLab │ │Argo CD │ │ Jaeger │ │ Falco  ││
-                                 │  │ Provider │ │ Provider │ │Provider│ │Provider│ │Provider│ │Provider│ │Provider││
-                                 │  └──────────┘ └──────────┘ └────────┘ └────────┘ └────────┘ └────────┘ └────────┘│
+                                 │  │Kubernetes│ │Prometheus│ │ GitHub │ │ GitLab │ │Argo CD │ │ Jaeger │ │ Falco  │ │ Loki   ││
+                                 │  │ Provider │ │ Provider │ │Provider│ │Provider│ │Provider│ │Provider│ │Provider│ │Provider││
+                                 │  └──────────┘ └──────────┘ └────────┘ └────────┘ └────────┘ └────────┘ └────────┘ └────────┘│
                                  │  ┌──────────────────────────────────────┐│
                                  │  │          Runes Provider               ││
                                  │  │       (correlation engine)            ││
@@ -266,9 +307,9 @@ Instead of listing raw events, groups them by rule name (e.g. *"3x Terminal shel
                                         │                │              │
                                         ▼                ▼              ▼
                                  ┌──────────┐ ┌──────────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌──────────────┐
-                                 │Kubernetes│ │Prometheus│ │ GitHub │ │ GitLab │ │Argo CD │ │ Jaeger │ │Falcosidekick│
-                                 │  API     │ │  API     │ │  API   │ │  API   │ │  API   │ │  API   │ │     API      │
-                                 └──────────┘ └──────────┘ └────────┘ └────────┘ └────────┘ └────────┘ └──────────────┘
+                                 │Kubernetes│ │Prometheus│ │ GitHub │ │ GitLab │ │Argo CD │ │ Jaeger │ │Falcosidekick│ │  Loki  │
+                                 │  API     │ │  API     │ │  API   │ │  API   │ │  API   │ │  API   │ │     API      │ │  API   │
+                                 └──────────┘ └──────────┘ └────────┘ └────────┘ └────────┘ └────────┘ └──────────────┘ └────────┘
 ```
 
 Providers are independent modules that register tools with a central dispatcher. The dispatcher wires each tool's schema and handler into the MCP server. Logging goes to stderr as structured JSON so it never interferes with the STDIO transport on stdout.
@@ -316,13 +357,17 @@ JAEGER_URL=http://jaeger-query:16686 ./rikugan
 # With Falco runtime security
 FALCO_URL=http://falcosidekick:2801 ./rikugan
 
-# All Six Eyes open
+# With Loki log search
+LOKI_URL=http://loki:3100 ./rikugan
+
+# All Seven Eyes open
 PROMETHEUS_URL=http://prometheus:9090 \
   GITHUB_TOKEN=ghp_... \
   GITLAB_TOKEN=glpat-... GITLAB_URL=https://gitlab.example.com \
   ARGOCD_SERVER=https://argocd.example.com ARGOCD_TOKEN=eyJ... \
   JAEGER_URL=http://jaeger-query:16686 \
   FALCO_URL=http://falcosidekick:2801 \
+  LOKI_URL=http://loki:3100 \
   ./rikugan
 ```
 
@@ -369,7 +414,8 @@ Add to your Claude Desktop MCP configuration (`claude_desktop_config.json`):
         "ARGOCD_SERVER": "https://argocd.example.com",
         "ARGOCD_TOKEN": "eyJ...",
         "JAEGER_URL": "http://jaeger-query:16686",
-        "FALCO_URL": "http://falcosidekick:2801"
+        "FALCO_URL": "http://falcosidekick:2801",
+        "LOKI_URL": "http://loki:3100"
       }
     }
   }
@@ -412,6 +458,10 @@ A user reports that API responses are slow. The agent calls `find_slow_traces` f
 
 A pod is behaving normally by all metrics but the team suspects compromise. The agent calls `analyze_pod_audit` on the pod. Falco reveals *"3x Terminal shell in container"* and *"1x Write below binary dir"* — someone exec'd into the container and modified a binary. The grouped summary immediately highlights the anomaly without flooding the context with hundreds of raw events.
 
+### Log Investigation
+
+An engineer sees a spike in 500s. The agent calls `find_slow_traces` for the `api-gateway` service, finds a trace with errors at `2024-01-15T10:32:00Z`. The agent then calls `get_log_context` with that timestamp and the `api-gateway` service to retrieve the surrounding log lines. The logs reveal a database connection timeout error right before the trace failure. The agent calls `detect_log_anomalies` on `api-gateway` and discovers that "connection timeout" errors account for 40% of recent ERROR lines — confirming a systemic issue rather than a one-off failure.
+
 ### Proactive Health Checks
 
 An agent on a scheduled loop calls `six_eyes` across key pods in a namespace. Healthy pods return an `INFO: HEALTHY` finding and are skipped. Any pod with warnings, restarts, or throttling gets flagged for review before it becomes an incident.
@@ -429,6 +479,7 @@ An agent on a scheduled loop calls `six_eyes` across key pods in a namespace. He
 | `ARGOCD_TOKEN` | Argo CD API bearer token | No (Argo CD tools disabled if unset) |
 | `JAEGER_URL` | Jaeger Query API URL (e.g. `http://jaeger-query:16686`) | No (Jaeger tools disabled if unset) |
 | `FALCO_URL` | Falcosidekick URL (e.g. `http://falcosidekick:2801`) | No (Falco tools disabled if unset) |
+| `LOKI_URL` | Loki API URL (e.g. `http://loki:3100`) | No (Loki tools disabled if unset) |
 | `RIKUGAN_LOG_LEVEL` | Log verbosity: `debug`, `info`, `warn`, `error` | No (defaults to `info`) |
 
 ## License
