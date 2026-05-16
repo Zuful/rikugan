@@ -20,7 +20,8 @@ func (p *Provider) findSlowTracesTool() provider.ToolDefinition {
 		mcp.WithDescription(
 			"Find the most recent slow traces for a service from Jaeger. "+
 				"Returns a summary table with trace ID, start time, and total duration. "+
-				"Useful for identifying latency issues in microservice architectures.",
+				"Useful for identifying latency issues in microservice architectures. "+
+				"[Methodology: Latency signal of LEST — see docs/methodology.md]",
 		),
 		mcp.WithString("service",
 			mcp.Required(),

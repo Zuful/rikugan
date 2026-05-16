@@ -27,7 +27,8 @@ func (p *Provider) detectLogAnomaliesTool() provider.ToolDefinition {
 			"Analyze recent logs for a service and detect anomalies. "+
 				"Classifies log lines by level, counts error/warning rates, "+
 				"and groups error messages by normalized pattern. "+
-				"Useful for spotting recurring issues or sudden error spikes.",
+				"Useful for spotting recurring issues or sudden error spikes. "+
+				"[Methodology: Errors signal of LEST — see docs/methodology.md]",
 		),
 		mcp.WithString("service",
 			mcp.Required(),

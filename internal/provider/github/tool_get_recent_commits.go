@@ -21,7 +21,8 @@ func (p *Provider) getRecentCommitsTool() provider.ToolDefinition {
 		mcp.WithDescription(
 			"Fetch the most recent commits from a GitHub repository. "+
 				"Returns a Markdown table with commit hash, author, date, and message. "+
-				"Useful for correlating code changes with runtime incidents.",
+				"Useful for correlating code changes with runtime incidents. "+
+				"[Methodology: Step 0 (what changed) — see docs/methodology.md]",
 		),
 		mcp.WithString("owner",
 			mcp.Required(),

@@ -20,7 +20,8 @@ func (p *Provider) getLogContextTool() provider.ToolDefinition {
 		mcp.WithDescription(
 			"Retrieve logs surrounding a specific timestamp for a service. "+
 				"This is a bridge tool — use it when you find a timestamp from a trace "+
-				"or event and want to see the surrounding log lines for context.",
+				"or event and want to see the surrounding log lines for context. "+
+				"[Methodology: Errors signal of LEST and cross-signal correlation — see docs/methodology.md]",
 		),
 		mcp.WithString("service",
 			mcp.Required(),

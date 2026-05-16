@@ -23,7 +23,8 @@ func (p *Provider) getImageProvenanceTool() provider.ToolDefinition {
 			"Extract container image tags from a Kubernetes pod and identify "+
 				"potential Git commit SHAs in the tags. Bridges the gap between "+
 				"a running pod and its source code — if a tag looks like a Git SHA, "+
-				"the report tells the LLM exactly which tool to call next.",
+				"the report tells the LLM exactly which tool to call next. "+
+				"[Methodology: Step 0 (what changed) — see docs/methodology.md]",
 		),
 		mcp.WithString("namespace",
 			mcp.Required(),
