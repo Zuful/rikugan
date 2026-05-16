@@ -29,7 +29,7 @@ const (
 )
 
 // diagnosePodTool returns the ToolDefinition for the diagnose_pod compound tool.
-func (p *KubernetesProvider) diagnosePodTool() provider.ToolDefinition {
+func (p *Provider) diagnosePodTool() provider.ToolDefinition {
 	tool := mcp.NewTool("diagnose_pod",
 		mcp.WithDescription(
 			"Diagnose a Kubernetes pod by gathering its status, conditions, "+
@@ -56,7 +56,7 @@ func (p *KubernetesProvider) diagnosePodTool() provider.ToolDefinition {
 }
 
 // handleDiagnosePod is the MCP handler for diagnose_pod.
-func (p *KubernetesProvider) handleDiagnosePod(
+func (p *Provider) handleDiagnosePod(
 	ctx context.Context,
 	req mcp.CallToolRequest,
 ) (*mcp.CallToolResult, error) {
@@ -131,7 +131,7 @@ func (p *KubernetesProvider) handleDiagnosePod(
 // fetchLogs retrieves the last `tail` lines from every container in the pod
 // concurrently. If a container has restarted, it also fetches logs from the
 // previous instance. Errors are captured inline (best-effort).
-func (p *KubernetesProvider) fetchLogs(
+func (p *Provider) fetchLogs(
 	ctx context.Context,
 	pod *corev1.Pod,
 	tail int64,
@@ -181,7 +181,7 @@ func (p *KubernetesProvider) fetchLogs(
 }
 
 // readLog fetches log lines for a single container.
-func (p *KubernetesProvider) readLog(
+func (p *Provider) readLog(
 	ctx context.Context,
 	ns, podName, container string,
 	tail int64,
@@ -209,7 +209,7 @@ func (p *KubernetesProvider) readLog(
 
 // ─── Report builder ─────────────────────────────────────────────────────────
 
-func (p *KubernetesProvider) buildReport(
+func (p *Provider) buildReport(
 	ns, podName string,
 	pod *corev1.Pod,
 	events []corev1.Event,
@@ -238,7 +238,7 @@ func (p *KubernetesProvider) buildReport(
 	return b.String()
 }
 
-func (p *KubernetesProvider) writeStatusSection(b *strings.Builder, pod *corev1.Pod) {
+func (p *Provider) writeStatusSection(b *strings.Builder, pod *corev1.Pod) {
 	phase := string(pod.Status.Phase)
 	statusEmoji := "✅"
 
@@ -277,7 +277,7 @@ func (p *KubernetesProvider) writeStatusSection(b *strings.Builder, pod *corev1.
 		phase, totalRestarts, age)
 }
 
-func (p *KubernetesProvider) writeConditionsSection(b *strings.Builder, pod *corev1.Pod) {
+func (p *Provider) writeConditionsSection(b *strings.Builder, pod *corev1.Pod) {
 	if len(pod.Status.Conditions) == 0 {
 		return
 	}
@@ -295,7 +295,7 @@ func (p *KubernetesProvider) writeConditionsSection(b *strings.Builder, pod *cor
 	b.WriteString("\n")
 }
 
-func (p *KubernetesProvider) writeContainerStatusSection(b *strings.Builder, pod *corev1.Pod) {
+func (p *Provider) writeContainerStatusSection(b *strings.Builder, pod *corev1.Pod) {
 	if len(pod.Status.ContainerStatuses) == 0 {
 		return
 	}
@@ -324,7 +324,7 @@ func describeContainerState(cs corev1.ContainerStatus) (string, string) {
 	}
 }
 
-func (p *KubernetesProvider) writeEventsSection(b *strings.Builder, events []corev1.Event) {
+func (p *Provider) writeEventsSection(b *strings.Builder, events []corev1.Event) {
 	if len(events) == 0 {
 		fmt.Fprintf(b, "### Events\n\nNo events found.\n\n")
 		return
@@ -357,7 +357,7 @@ func (p *KubernetesProvider) writeEventsSection(b *strings.Builder, events []cor
 	b.WriteString("\n")
 }
 
-func (p *KubernetesProvider) writeLogsSection(b *strings.Builder, logs map[string]string) {
+func (p *Provider) writeLogsSection(b *strings.Builder, logs map[string]string) {
 	if len(logs) == 0 {
 		return
 	}

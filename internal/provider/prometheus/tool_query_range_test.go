@@ -28,8 +28,8 @@ func (m *mockAPI) QueryRange(_ context.Context, _ string, _ promv1.Range, _ ...p
 	return m.result, m.warnings, m.err
 }
 
-func newTestProvider(api promv1.API) *PrometheusProvider {
-	return &PrometheusProvider{
+func newTestProvider(api promv1.API) *Provider {
+	return &Provider{
 		api:    api,
 		logger: slog.Default(),
 	}

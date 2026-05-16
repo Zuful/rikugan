@@ -16,7 +16,7 @@ import (
 const topSpanCount = 3
 
 // analyzeTraceTool returns the ToolDefinition for analyze_trace.
-func (p *JaegerProvider) analyzeTraceTool() provider.ToolDefinition {
+func (p *Provider) analyzeTraceTool() provider.ToolDefinition {
 	tool := mcp.NewTool("analyze_trace",
 		mcp.WithDescription(
 			"Analyze a Jaeger trace and return a synthesized bottleneck report. "+
@@ -37,7 +37,7 @@ func (p *JaegerProvider) analyzeTraceTool() provider.ToolDefinition {
 }
 
 // handleAnalyzeTrace is the MCP handler for analyze_trace.
-func (p *JaegerProvider) handleAnalyzeTrace(
+func (p *Provider) handleAnalyzeTrace(
 	ctx context.Context,
 	req mcp.CallToolRequest,
 ) (*mcp.CallToolResult, error) {

@@ -15,13 +15,16 @@ import (
 	"github.com/Zuful/rikugan/internal/provider"
 )
 
-// PrometheusProvider implements provider.Provider for Prometheus backends.
-type PrometheusProvider struct {
+// Provider implements provider.Provider for Prometheus backends.
+// Compile-time check that *Provider satisfies provider.Provider.
+var _ provider.Provider = (*Provider)(nil)
+
+type Provider struct {
 	api    promv1.API
 	logger *slog.Logger
 }
 
-// Option configures the PrometheusProvider.
+// Option configures the Provider.
 type Option func(*options)
 
 type options struct {
@@ -55,23 +58,23 @@ func BuildAPI(url string) (promv1.API, error) {
 	return promv1.NewAPI(client), nil
 }
 
-// NewFromAPI constructs a PrometheusProvider from a pre-built API.
-func NewFromAPI(api promv1.API, opts ...Option) *PrometheusProvider {
+// NewFromAPI constructs a Provider from a pre-built API.
+func NewFromAPI(api promv1.API, opts ...Option) *Provider {
 	o := &options{logger: slog.Default()}
 	for _, fn := range opts {
 		fn(o)
 	}
-	return &PrometheusProvider{
+	return &Provider{
 		api:    api,
 		logger: o.logger.With(slog.String("provider", "prometheus")),
 	}
 }
 
-// New creates a PrometheusProvider. It resolves the URL in this order:
+// New creates a Provider. It resolves the URL in this order:
 //  1. Explicit URL via WithURL
 //  2. PROMETHEUS_URL environment variable
 //  3. Error if neither is set
-func New(opts ...Option) (*PrometheusProvider, error) {
+func New(opts ...Option) (*Provider, error) {
 	o := &options{
 		logger: slog.Default(),
 	}
@@ -89,17 +92,17 @@ func New(opts ...Option) (*PrometheusProvider, error) {
 		slog.String("url", o.url),
 	)
 
-	return &PrometheusProvider{
+	return &Provider{
 		api:    api,
 		logger: logger,
 	}, nil
 }
 
 // Name returns the provider identifier.
-func (p *PrometheusProvider) Name() string { return "prometheus" }
+func (p *Provider) Name() string { return "prometheus" }
 
 // Tools returns all MCP tools exposed by this provider.
-func (p *PrometheusProvider) Tools() []provider.ToolDefinition {
+func (p *Provider) Tools() []provider.ToolDefinition {
 	return []provider.ToolDefinition{
 		p.queryRangeTool(),
 	}

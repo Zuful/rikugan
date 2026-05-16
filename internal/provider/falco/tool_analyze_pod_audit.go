@@ -14,7 +14,7 @@ import (
 )
 
 // analyzePodAuditTool returns the ToolDefinition for analyze_pod_audit.
-func (p *FalcoProvider) analyzePodAuditTool() provider.ToolDefinition {
+func (p *Provider) analyzePodAuditTool() provider.ToolDefinition {
 	tool := mcp.NewTool("analyze_pod_audit",
 		mcp.WithDescription(
 			"Analyze Falco security events for a specific pod over the last 24 hours. "+
@@ -38,7 +38,7 @@ func (p *FalcoProvider) analyzePodAuditTool() provider.ToolDefinition {
 }
 
 // handleAnalyzePodAudit is the MCP handler for analyze_pod_audit.
-func (p *FalcoProvider) handleAnalyzePodAudit(
+func (p *Provider) handleAnalyzePodAudit(
 	ctx context.Context,
 	req mcp.CallToolRequest,
 ) (*mcp.CallToolResult, error) {

@@ -12,13 +12,16 @@ import (
 	"github.com/Zuful/rikugan/internal/provider"
 )
 
-// FalcoProvider implements provider.Provider for Falcosidekick backends.
-type FalcoProvider struct {
+// Provider implements provider.Provider for Falcosidekick backends.
+// Compile-time check that *Provider satisfies provider.Provider.
+var _ provider.Provider = (*Provider)(nil)
+
+type Provider struct {
 	client *Client
 	logger *slog.Logger
 }
 
-// Option configures the FalcoProvider.
+// Option configures the Provider.
 type Option func(*options)
 
 type options struct {
@@ -42,23 +45,23 @@ func BuildClient(baseURL string) (*Client, error) {
 	return NewClient(baseURL), nil
 }
 
-// NewFromClient constructs a FalcoProvider from a pre-built client.
-func NewFromClient(client *Client, opts ...Option) *FalcoProvider {
+// NewFromClient constructs a Provider from a pre-built client.
+func NewFromClient(client *Client, opts ...Option) *Provider {
 	o := &options{logger: slog.Default()}
 	for _, fn := range opts {
 		fn(o)
 	}
-	return &FalcoProvider{
+	return &Provider{
 		client: client,
 		logger: o.logger.With(slog.String("provider", "falco")),
 	}
 }
 
 // Name returns the provider identifier.
-func (p *FalcoProvider) Name() string { return "falco" }
+func (p *Provider) Name() string { return "falco" }
 
 // Tools returns all MCP tools exposed by this provider.
-func (p *FalcoProvider) Tools() []provider.ToolDefinition {
+func (p *Provider) Tools() []provider.ToolDefinition {
 	return []provider.ToolDefinition{
 		p.getSecurityEventsTool(),
 		p.analyzePodAuditTool(),

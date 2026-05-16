@@ -12,13 +12,16 @@ import (
 	"github.com/Zuful/rikugan/internal/provider"
 )
 
-// ArgoCDProvider implements provider.Provider for Argo CD backends.
-type ArgoCDProvider struct {
+// Provider implements provider.Provider for Argo CD backends.
+// Compile-time check that *Provider satisfies provider.Provider.
+var _ provider.Provider = (*Provider)(nil)
+
+type Provider struct {
 	client *Client
 	logger *slog.Logger
 }
 
-// Option configures the ArgoCDProvider.
+// Option configures the Provider.
 type Option func(*options)
 
 type options struct {
@@ -48,23 +51,23 @@ func BuildClient(serverURL, token string) (*Client, error) {
 	return NewClient(serverURL, token), nil
 }
 
-// NewFromClient constructs an ArgoCDProvider from a pre-built client.
-func NewFromClient(client *Client, opts ...Option) *ArgoCDProvider {
+// NewFromClient constructs an Provider from a pre-built client.
+func NewFromClient(client *Client, opts ...Option) *Provider {
 	o := &options{logger: slog.Default()}
 	for _, fn := range opts {
 		fn(o)
 	}
-	return &ArgoCDProvider{
+	return &Provider{
 		client: client,
 		logger: o.logger.With(slog.String("provider", "argocd")),
 	}
 }
 
 // Name returns the provider identifier.
-func (p *ArgoCDProvider) Name() string { return "argocd" }
+func (p *Provider) Name() string { return "argocd" }
 
 // Tools returns all MCP tools exposed by this provider.
-func (p *ArgoCDProvider) Tools() []provider.ToolDefinition {
+func (p *Provider) Tools() []provider.ToolDefinition {
 	return []provider.ToolDefinition{
 		p.getAppStatusTool(),
 		p.listDegradedAppsTool(),

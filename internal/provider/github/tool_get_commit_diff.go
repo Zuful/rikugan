@@ -16,7 +16,7 @@ import (
 const maxDiffChars = 10_000
 
 // getCommitDiffTool returns the ToolDefinition for get_commit_diff.
-func (p *GitHubProvider) getCommitDiffTool() provider.ToolDefinition {
+func (p *Provider) getCommitDiffTool() provider.ToolDefinition {
 	tool := mcp.NewTool("get_commit_diff",
 		mcp.WithDescription(
 			"Fetch the full diff for a specific commit from a GitHub repository. "+
@@ -44,7 +44,7 @@ func (p *GitHubProvider) getCommitDiffTool() provider.ToolDefinition {
 }
 
 // handleGetCommitDiff is the MCP handler for get_commit_diff.
-func (p *GitHubProvider) handleGetCommitDiff(
+func (p *Provider) handleGetCommitDiff(
 	ctx context.Context,
 	req mcp.CallToolRequest,
 ) (*mcp.CallToolResult, error) {

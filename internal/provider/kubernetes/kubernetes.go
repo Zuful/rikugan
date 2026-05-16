@@ -17,13 +17,16 @@ import (
 	"github.com/Zuful/rikugan/internal/provider"
 )
 
-// KubernetesProvider implements provider.Provider for Kubernetes backends.
-type KubernetesProvider struct {
+// Compile-time check that *Provider satisfies provider.Provider.
+var _ provider.Provider = (*Provider)(nil)
+
+// Provider implements provider.Provider for Kubernetes backends.
+type Provider struct {
 	client kubernetes.Interface
 	logger *slog.Logger
 }
 
-// Option configures the KubernetesProvider.
+// Option configures the Provider.
 type Option func(*options)
 
 type options struct {
@@ -57,50 +60,23 @@ func BuildClient(kubeconfig string) (kubernetes.Interface, error) {
 	return cs, nil
 }
 
-// NewFromClient constructs a KubernetesProvider from a pre-built client.
-func NewFromClient(client kubernetes.Interface, opts ...Option) *KubernetesProvider {
+// NewFromClient constructs a Provider from a pre-built client.
+func NewFromClient(client kubernetes.Interface, opts ...Option) *Provider {
 	o := &options{logger: slog.Default()}
 	for _, fn := range opts {
 		fn(o)
 	}
-	return &KubernetesProvider{
+	return &Provider{
 		client: client,
 		logger: o.logger.With(slog.String("provider", "kubernetes")),
 	}
 }
 
-// New creates a KubernetesProvider. It resolves the kubeconfig in this order:
-//  1. Explicit path via WithKubeconfig
-//  2. KUBECONFIG environment variable
-//  3. In-cluster config (when running inside a pod)
-//  4. ~/.kube/config
-func New(opts ...Option) (*KubernetesProvider, error) {
-	o := &options{
-		logger: slog.Default(),
-	}
-	for _, fn := range opts {
-		fn(o)
-	}
-
-	cs, err := BuildClient(o.kubeconfig)
-	if err != nil {
-		return nil, err
-	}
-
-	logger := o.logger.With(slog.String("provider", "kubernetes"))
-	logger.Info("kubernetes provider initialised")
-
-	return &KubernetesProvider{
-		client: cs,
-		logger: logger,
-	}, nil
-}
-
 // Name returns the provider identifier.
-func (p *KubernetesProvider) Name() string { return "kubernetes" }
+func (p *Provider) Name() string { return "kubernetes" }
 
 // Tools returns all MCP tools exposed by this provider.
-func (p *KubernetesProvider) Tools() []provider.ToolDefinition {
+func (p *Provider) Tools() []provider.ToolDefinition {
 	return []provider.ToolDefinition{
 		p.diagnosePodTool(),
 		p.findPodsByServiceTool(),

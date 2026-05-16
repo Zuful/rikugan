@@ -15,7 +15,7 @@ import (
 const opTimeout = 30 * time.Second
 
 // findSlowTracesTool returns the ToolDefinition for find_slow_traces.
-func (p *JaegerProvider) findSlowTracesTool() provider.ToolDefinition {
+func (p *Provider) findSlowTracesTool() provider.ToolDefinition {
 	tool := mcp.NewTool("find_slow_traces",
 		mcp.WithDescription(
 			"Find the most recent slow traces for a service from Jaeger. "+
@@ -38,7 +38,7 @@ func (p *JaegerProvider) findSlowTracesTool() provider.ToolDefinition {
 }
 
 // handleFindSlowTraces is the MCP handler for find_slow_traces.
-func (p *JaegerProvider) handleFindSlowTraces(
+func (p *Provider) handleFindSlowTraces(
 	ctx context.Context,
 	req mcp.CallToolRequest,
 ) (*mcp.CallToolResult, error) {

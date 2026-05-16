@@ -15,7 +15,7 @@ import (
 const defaultWindow = 5 * time.Minute
 
 // getLogContextTool returns the ToolDefinition for get_log_context.
-func (p *LokiProvider) getLogContextTool() provider.ToolDefinition {
+func (p *Provider) getLogContextTool() provider.ToolDefinition {
 	tool := mcp.NewTool("get_log_context",
 		mcp.WithDescription(
 			"Retrieve logs surrounding a specific timestamp for a service. "+
@@ -45,7 +45,7 @@ func (p *LokiProvider) getLogContextTool() provider.ToolDefinition {
 }
 
 // handleGetLogContext is the MCP handler for get_log_context.
-func (p *LokiProvider) handleGetLogContext(
+func (p *Provider) handleGetLogContext(
 	ctx context.Context,
 	req mcp.CallToolRequest,
 ) (*mcp.CallToolResult, error) {

@@ -16,14 +16,14 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 )
 
-// newTestProvider returns a KubernetesProvider backed by a fake clientset.
-func newTestProvider(pods ...*corev1.Pod) *KubernetesProvider {
+// newTestProvider returns a Provider backed by a fake clientset.
+func newTestProvider(pods ...*corev1.Pod) *Provider {
 	objs := make([]runtime.Object, len(pods))
 	for i, pod := range pods {
 		objs[i] = pod
 	}
 	cs := fake.NewClientset(objs...)
-	return &KubernetesProvider{
+	return &Provider{
 		client: cs,
 		logger: slog.Default(),
 	}

@@ -15,7 +15,7 @@ import (
 const opTimeout = 30 * time.Second
 
 // getAppStatusTool returns the ToolDefinition for get_app_status.
-func (p *ArgoCDProvider) getAppStatusTool() provider.ToolDefinition {
+func (p *Provider) getAppStatusTool() provider.ToolDefinition {
 	tool := mcp.NewTool("get_app_status",
 		mcp.WithDescription(
 			"Get the sync and health status of an Argo CD application. "+
@@ -36,7 +36,7 @@ func (p *ArgoCDProvider) getAppStatusTool() provider.ToolDefinition {
 }
 
 // handleGetAppStatus is the MCP handler for get_app_status.
-func (p *ArgoCDProvider) handleGetAppStatus(
+func (p *Provider) handleGetAppStatus(
 	ctx context.Context,
 	req mcp.CallToolRequest,
 ) (*mcp.CallToolResult, error) {

@@ -17,7 +17,7 @@ import (
 var gitSHAPattern = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
 
 // getImageProvenanceTool returns the ToolDefinition for get_image_provenance.
-func (p *KubernetesProvider) getImageProvenanceTool() provider.ToolDefinition {
+func (p *Provider) getImageProvenanceTool() provider.ToolDefinition {
 	tool := mcp.NewTool("get_image_provenance",
 		mcp.WithDescription(
 			"Extract container image tags from a Kubernetes pod and identify "+
@@ -42,7 +42,7 @@ func (p *KubernetesProvider) getImageProvenanceTool() provider.ToolDefinition {
 }
 
 // handleGetImageProvenance is the MCP handler for get_image_provenance.
-func (p *KubernetesProvider) handleGetImageProvenance(
+func (p *Provider) handleGetImageProvenance(
 	ctx context.Context,
 	req mcp.CallToolRequest,
 ) (*mcp.CallToolResult, error) {

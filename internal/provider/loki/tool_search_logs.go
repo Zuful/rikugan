@@ -40,7 +40,7 @@ type logEntry struct {
 }
 
 // searchLogsTool returns the ToolDefinition for search_logs.
-func (p *LokiProvider) searchLogsTool() provider.ToolDefinition {
+func (p *Provider) searchLogsTool() provider.ToolDefinition {
 	tool := mcp.NewTool("search_logs",
 		mcp.WithDescription(
 			"Search logs in Loki using a LogQL expression. "+
@@ -69,7 +69,7 @@ func (p *LokiProvider) searchLogsTool() provider.ToolDefinition {
 }
 
 // handleSearchLogs is the MCP handler for search_logs.
-func (p *LokiProvider) handleSearchLogs(
+func (p *Provider) handleSearchLogs(
 	ctx context.Context,
 	req mcp.CallToolRequest,
 ) (*mcp.CallToolResult, error) {

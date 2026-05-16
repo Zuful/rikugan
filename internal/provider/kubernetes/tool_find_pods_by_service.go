@@ -14,7 +14,7 @@ import (
 )
 
 // findPodsByServiceTool returns the ToolDefinition for find_pods_by_service_name.
-func (p *KubernetesProvider) findPodsByServiceTool() provider.ToolDefinition {
+func (p *Provider) findPodsByServiceTool() provider.ToolDefinition {
 	tool := mcp.NewTool("find_pods_by_service_name",
 		mcp.WithDescription(
 			"Find Kubernetes pods that belong to a logical service name. "+
@@ -38,7 +38,7 @@ func (p *KubernetesProvider) findPodsByServiceTool() provider.ToolDefinition {
 }
 
 // handleFindPodsByService is the MCP handler for find_pods_by_service_name.
-func (p *KubernetesProvider) handleFindPodsByService(
+func (p *Provider) handleFindPodsByService(
 	ctx context.Context,
 	req mcp.CallToolRequest,
 ) (*mcp.CallToolResult, error) {
