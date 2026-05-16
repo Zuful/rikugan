@@ -41,14 +41,14 @@ func (m *mockAPI) QueryRange(_ context.Context, query string, _ promv1.Range, _ 
 
 // ─── Test helpers ────────────────────────────────────────────────────────────
 
-func newTestProvider(pods []*corev1.Pod, promResponses map[string]mockResponse) *RunesProvider {
+func newTestProvider(pods []*corev1.Pod, promResponses map[string]mockResponse) *Provider {
 	objs := make([]runtime.Object, len(pods))
 	for i, pod := range pods {
 		objs[i] = pod
 	}
 	cs := fake.NewClientset(objs...)
 	api := &mockAPI{responses: promResponses}
-	return &RunesProvider{
+	return &Provider{
 		k8s:    cs,
 		prom:   api,
 		logger: slog.Default(),

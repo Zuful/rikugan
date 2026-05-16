@@ -23,7 +23,7 @@ import (
 const opTimeout = 60 * time.Second
 
 // sixEyesTool returns the ToolDefinition for the six_eyes compound tool.
-func (p *RunesProvider) sixEyesTool() provider.ToolDefinition {
+func (p *Provider) sixEyesTool() provider.ToolDefinition {
 	tool := mcp.NewTool("six_eyes",
 		mcp.WithDescription(
 			"Correlate Kubernetes pod diagnostics with Prometheus metrics "+
@@ -50,7 +50,7 @@ func (p *RunesProvider) sixEyesTool() provider.ToolDefinition {
 }
 
 // handleSixEyes is the MCP handler for six_eyes.
-func (p *RunesProvider) handleSixEyes(
+func (p *Provider) handleSixEyes(
 	ctx context.Context,
 	req mcp.CallToolRequest,
 ) (*mcp.CallToolResult, error) {
@@ -143,7 +143,7 @@ func (p *RunesProvider) handleSixEyes(
 
 // ─── Report builder ──────────────────────────────────────────────────────────
 
-func (p *RunesProvider) buildSixEyesReport(
+func (p *Provider) buildSixEyesReport(
 	ns, podName string,
 	pod *corev1.Pod,
 	events []corev1.Event,

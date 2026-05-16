@@ -21,7 +21,7 @@ const (
 )
 
 // detectLogAnomaliesTool returns the ToolDefinition for detect_log_anomalies.
-func (p *LokiProvider) detectLogAnomaliesTool() provider.ToolDefinition {
+func (p *Provider) detectLogAnomaliesTool() provider.ToolDefinition {
 	tool := mcp.NewTool("detect_log_anomalies",
 		mcp.WithDescription(
 			"Analyze recent logs for a service and detect anomalies. "+
@@ -48,7 +48,7 @@ func (p *LokiProvider) detectLogAnomaliesTool() provider.ToolDefinition {
 }
 
 // handleDetectLogAnomalies is the MCP handler for detect_log_anomalies.
-func (p *LokiProvider) handleDetectLogAnomalies(
+func (p *Provider) handleDetectLogAnomalies(
 	ctx context.Context,
 	req mcp.CallToolRequest,
 ) (*mcp.CallToolResult, error) {

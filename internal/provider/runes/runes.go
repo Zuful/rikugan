@@ -13,14 +13,17 @@ import (
 	"github.com/Zuful/rikugan/internal/provider"
 )
 
-// RunesProvider implements provider.Provider by correlating K8s and Prometheus data.
-type RunesProvider struct {
+// Provider implements provider.Provider by correlating K8s and Prometheus data.
+// Compile-time check that *Provider satisfies provider.Provider.
+var _ provider.Provider = (*Provider)(nil)
+
+type Provider struct {
 	k8s  kubernetes.Interface
 	prom promv1.API
 	logger *slog.Logger
 }
 
-// Option configures the RunesProvider.
+// Option configures the Provider.
 type Option func(*options)
 
 type options struct {
@@ -32,13 +35,13 @@ func WithLogger(logger *slog.Logger) Option {
 	return func(o *options) { o.logger = logger }
 }
 
-// New creates a RunesProvider from pre-built K8s and Prometheus clients.
-func New(k8s kubernetes.Interface, prom promv1.API, opts ...Option) *RunesProvider {
+// New creates a Provider from pre-built K8s and Prometheus clients.
+func New(k8s kubernetes.Interface, prom promv1.API, opts ...Option) *Provider {
 	o := &options{logger: slog.Default()}
 	for _, fn := range opts {
 		fn(o)
 	}
-	return &RunesProvider{
+	return &Provider{
 		k8s:    k8s,
 		prom:   prom,
 		logger: o.logger.With(slog.String("provider", "runes")),
@@ -46,10 +49,10 @@ func New(k8s kubernetes.Interface, prom promv1.API, opts ...Option) *RunesProvid
 }
 
 // Name returns the provider identifier.
-func (p *RunesProvider) Name() string { return "runes" }
+func (p *Provider) Name() string { return "runes" }
 
 // Tools returns all MCP tools exposed by this provider.
-func (p *RunesProvider) Tools() []provider.ToolDefinition {
+func (p *Provider) Tools() []provider.ToolDefinition {
 	return []provider.ToolDefinition{
 		p.sixEyesTool(),
 	}

@@ -13,13 +13,16 @@ import (
 	"github.com/Zuful/rikugan/internal/provider"
 )
 
-// LokiProvider implements provider.Provider for Loki backends.
-type LokiProvider struct {
+// Provider implements provider.Provider for Loki backends.
+// Compile-time check that *Provider satisfies provider.Provider.
+var _ provider.Provider = (*Provider)(nil)
+
+type Provider struct {
 	client *Client
 	logger *slog.Logger
 }
 
-// Option configures the LokiProvider.
+// Option configures the Provider.
 type Option func(*options)
 
 type options struct {
@@ -43,23 +46,23 @@ func BuildClient(baseURL string) (*Client, error) {
 	return NewClient(baseURL), nil
 }
 
-// NewFromClient constructs a LokiProvider from a pre-built client.
-func NewFromClient(client *Client, opts ...Option) *LokiProvider {
+// NewFromClient constructs a Provider from a pre-built client.
+func NewFromClient(client *Client, opts ...Option) *Provider {
 	o := &options{logger: slog.Default()}
 	for _, fn := range opts {
 		fn(o)
 	}
-	return &LokiProvider{
+	return &Provider{
 		client: client,
 		logger: o.logger.With(slog.String("provider", "loki")),
 	}
 }
 
 // Name returns the provider identifier.
-func (p *LokiProvider) Name() string { return "loki" }
+func (p *Provider) Name() string { return "loki" }
 
 // Tools returns all MCP tools exposed by this provider.
-func (p *LokiProvider) Tools() []provider.ToolDefinition {
+func (p *Provider) Tools() []provider.ToolDefinition {
 	return []provider.ToolDefinition{
 		p.searchLogsTool(),
 		p.getLogContextTool(),

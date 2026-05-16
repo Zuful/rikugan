@@ -15,13 +15,16 @@ import (
 	"github.com/Zuful/rikugan/internal/provider"
 )
 
-// GitLabProvider implements provider.Provider for GitLab backends.
-type GitLabProvider struct {
+// Provider implements provider.Provider for GitLab backends.
+// Compile-time check that *Provider satisfies provider.Provider.
+var _ provider.Provider = (*Provider)(nil)
+
+type Provider struct {
 	client *gl.Client
 	logger *slog.Logger
 }
 
-// Option configures the GitLabProvider.
+// Option configures the Provider.
 type Option func(*options)
 
 type options struct {
@@ -60,23 +63,23 @@ func BuildClient(token, baseURL string) (*gl.Client, error) {
 	return client, nil
 }
 
-// NewFromClient constructs a GitLabProvider from a pre-built client.
-func NewFromClient(client *gl.Client, opts ...Option) *GitLabProvider {
+// NewFromClient constructs a Provider from a pre-built client.
+func NewFromClient(client *gl.Client, opts ...Option) *Provider {
 	o := &options{logger: slog.Default()}
 	for _, fn := range opts {
 		fn(o)
 	}
-	return &GitLabProvider{
+	return &Provider{
 		client: client,
 		logger: o.logger.With(slog.String("provider", "gitlab")),
 	}
 }
 
 // Name returns the provider identifier.
-func (p *GitLabProvider) Name() string { return "gitlab" }
+func (p *Provider) Name() string { return "gitlab" }
 
 // Tools returns all MCP tools exposed by this provider.
-func (p *GitLabProvider) Tools() []provider.ToolDefinition {
+func (p *Provider) Tools() []provider.ToolDefinition {
 	return []provider.ToolDefinition{
 		p.getRecentCommitsTool(),
 		p.getCommitDiffTool(),

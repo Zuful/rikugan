@@ -19,10 +19,10 @@ import (
 	"github.com/Zuful/rikugan/internal/provider/argocd"
 	"github.com/Zuful/rikugan/internal/provider/falco"
 	"github.com/Zuful/rikugan/internal/provider/github"
-	"github.com/Zuful/rikugan/internal/provider/loki"
 	"github.com/Zuful/rikugan/internal/provider/gitlab"
 	"github.com/Zuful/rikugan/internal/provider/jaeger"
 	"github.com/Zuful/rikugan/internal/provider/kubernetes"
+	"github.com/Zuful/rikugan/internal/provider/loki"
 	"github.com/Zuful/rikugan/internal/provider/prometheus"
 	"github.com/Zuful/rikugan/internal/provider/runes"
 )

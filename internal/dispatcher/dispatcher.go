@@ -54,3 +54,4 @@ func (d *Dispatcher) Register(p provider.Provider) error {
 func (d *Dispatcher) Providers() []provider.Provider {
 	return d.providers
 }
+

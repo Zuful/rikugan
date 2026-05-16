@@ -19,7 +19,7 @@ const (
 )
 
 // getSecurityEventsTool returns the ToolDefinition for get_security_events.
-func (p *FalcoProvider) getSecurityEventsTool() provider.ToolDefinition {
+func (p *Provider) getSecurityEventsTool() provider.ToolDefinition {
 	tool := mcp.NewTool("get_security_events",
 		mcp.WithDescription(
 			"Fetch recent Falco security events from Falcosidekick. "+
@@ -44,7 +44,7 @@ func (p *FalcoProvider) getSecurityEventsTool() provider.ToolDefinition {
 }
 
 // handleGetSecurityEvents is the MCP handler for get_security_events.
-func (p *FalcoProvider) handleGetSecurityEvents(
+func (p *Provider) handleGetSecurityEvents(
 	ctx context.Context,
 	req mcp.CallToolRequest,
 ) (*mcp.CallToolResult, error) {

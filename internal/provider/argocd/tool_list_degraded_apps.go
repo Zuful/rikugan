@@ -12,7 +12,7 @@ import (
 )
 
 // listDegradedAppsTool returns the ToolDefinition for list_degraded_apps.
-func (p *ArgoCDProvider) listDegradedAppsTool() provider.ToolDefinition {
+func (p *Provider) listDegradedAppsTool() provider.ToolDefinition {
 	tool := mcp.NewTool("list_degraded_apps",
 		mcp.WithDescription(
 			"List all Argo CD applications that are currently Degraded or OutOfSync. "+
@@ -31,7 +31,7 @@ func (p *ArgoCDProvider) listDegradedAppsTool() provider.ToolDefinition {
 }
 
 // handleListDegradedApps is the MCP handler for list_degraded_apps.
-func (p *ArgoCDProvider) handleListDegradedApps(
+func (p *Provider) handleListDegradedApps(
 	ctx context.Context,
 	req mcp.CallToolRequest,
 ) (*mcp.CallToolResult, error) {

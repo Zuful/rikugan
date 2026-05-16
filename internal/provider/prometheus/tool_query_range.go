@@ -23,7 +23,7 @@ const (
 )
 
 // queryRangeTool returns the ToolDefinition for the query_range tool.
-func (p *PrometheusProvider) queryRangeTool() provider.ToolDefinition {
+func (p *Provider) queryRangeTool() provider.ToolDefinition {
 	tool := mcp.NewTool("query_range",
 		mcp.WithDescription(
 			"Execute a PromQL range query against Prometheus and return a "+
@@ -52,7 +52,7 @@ func (p *PrometheusProvider) queryRangeTool() provider.ToolDefinition {
 }
 
 // handleQueryRange is the MCP handler for query_range.
-func (p *PrometheusProvider) handleQueryRange(
+func (p *Provider) handleQueryRange(
 	ctx context.Context,
 	req mcp.CallToolRequest,
 ) (*mcp.CallToolResult, error) {
@@ -129,25 +129,19 @@ func (p *PrometheusProvider) handleQueryRange(
 // ─── Argument helpers ────────────────────────────────────────────────────────
 
 func parseTimeArg(req mcp.CallToolRequest, name string, fallback time.Time) (time.Time, error) {
-	raw, err := req.RequireString(name)
-	if err != nil {
-		// Not provided — use fallback.
+	raw := req.GetString(name, "")
+	if raw == "" {
 		return fallback, nil
 	}
-	t, parseErr := time.Parse(time.RFC3339, raw)
-	if parseErr != nil {
-		return time.Time{}, fmt.Errorf("cannot parse %q as RFC3339: %w", raw, parseErr)
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("cannot parse %q as RFC3339: %w", raw, err)
 	}
 	return t, nil
 }
 
 func parseStepArg(req mcp.CallToolRequest) (time.Duration, error) {
-	raw, err := req.RequireString("step")
-	if err != nil {
-		// Not provided — use default.
-		return parseDuration(defaultStep)
-	}
-	return parseDuration(raw)
+	return parseDuration(req.GetString("step", defaultStep))
 }
 
 // parseDuration tries Go's time.ParseDuration first, then falls back to

@@ -16,7 +16,7 @@ import (
 const opTimeout = 30 * time.Second
 
 // getRecentCommitsTool returns the ToolDefinition for get_recent_commits.
-func (p *GitHubProvider) getRecentCommitsTool() provider.ToolDefinition {
+func (p *Provider) getRecentCommitsTool() provider.ToolDefinition {
 	tool := mcp.NewTool("get_recent_commits",
 		mcp.WithDescription(
 			"Fetch the most recent commits from a GitHub repository. "+
@@ -43,7 +43,7 @@ func (p *GitHubProvider) getRecentCommitsTool() provider.ToolDefinition {
 }
 
 // handleGetRecentCommits is the MCP handler for get_recent_commits.
-func (p *GitHubProvider) handleGetRecentCommits(
+func (p *Provider) handleGetRecentCommits(
 	ctx context.Context,
 	req mcp.CallToolRequest,
 ) (*mcp.CallToolResult, error) {
