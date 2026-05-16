@@ -34,7 +34,8 @@ func (p *Provider) diagnosePodTool() provider.ToolDefinition {
 		mcp.WithDescription(
 			"Diagnose a Kubernetes pod by gathering its status, conditions, "+
 				"recent events, and container logs in a single call. "+
-				"Returns a structured Markdown report.",
+				"Returns a structured Markdown report. "+
+				"[Methodology: Errors and Saturation signals of LEST (pod crashes, OOM, resource limits) — see docs/methodology.md]",
 		),
 		mcp.WithString("namespace",
 			mcp.Required(),

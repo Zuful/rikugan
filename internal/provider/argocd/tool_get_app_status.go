@@ -21,7 +21,8 @@ func (p *Provider) getAppStatusTool() provider.ToolDefinition {
 			"Get the sync and health status of an Argo CD application. "+
 				"Returns sync state, health state, tracked repository, target revision, "+
 				"and any error messages. Useful for determining if a GitOps deployment "+
-				"succeeded or is out of sync.",
+				"succeeded or is out of sync. "+
+				"[Methodology: Step 0 (what changed) — see docs/methodology.md]",
 		),
 		mcp.WithString("app_name",
 			mcp.Required(),

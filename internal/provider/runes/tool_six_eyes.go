@@ -28,7 +28,8 @@ func (p *Provider) sixEyesTool() provider.ToolDefinition {
 		mcp.WithDescription(
 			"Correlate Kubernetes pod diagnostics with Prometheus metrics "+
 				"to diagnose why a pod crashed or is unhealthy. "+
-				"Returns a unified Markdown report with findings, pod state, events, and metrics.",
+				"Returns a unified Markdown report with findings, pod state, events, and metrics. "+
+				"[Methodology: cross-signal correlation (Step 2) — see docs/methodology.md]",
 		),
 		mcp.WithString("namespace",
 			mcp.Required(),

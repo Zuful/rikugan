@@ -20,7 +20,8 @@ func (p *Provider) findPodsByServiceTool() provider.ToolDefinition {
 			"Find Kubernetes pods that belong to a logical service name. "+
 				"Bridges the gap between Jaeger service names and Kubernetes pod names. "+
 				"Searches by common labels (app, app.kubernetes.io/name) first, "+
-				"then falls back to pod name prefix matching.",
+				"then falls back to pod name prefix matching. "+
+				"[Methodology: cross-signal correlation and blast-radius scoping — see docs/methodology.md]",
 		),
 		mcp.WithString("service_name",
 			mcp.Required(),

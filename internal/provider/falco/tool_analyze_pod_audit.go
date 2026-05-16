@@ -20,7 +20,8 @@ func (p *Provider) analyzePodAuditTool() provider.ToolDefinition {
 			"Analyze Falco security events for a specific pod over the last 24 hours. "+
 				"Returns a synthesized summary grouped by rule (e.g. \"3x Terminal shell in container\") "+
 				"rather than raw events, protecting the LLM context window. "+
-				"Useful for detecting anomalous runtime behavior, manual intervention, or security breaches.",
+				"Useful for detecting anomalous runtime behavior, manual intervention, or security breaches. "+
+				"[Methodology: Errors signal of LEST (runtime anomalies) — see docs/methodology.md]",
 		),
 		mcp.WithString("pod_name",
 			mcp.Required(),

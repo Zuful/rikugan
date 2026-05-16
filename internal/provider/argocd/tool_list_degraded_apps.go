@@ -17,7 +17,8 @@ func (p *Provider) listDegradedAppsTool() provider.ToolDefinition {
 		mcp.WithDescription(
 			"List all Argo CD applications that are currently Degraded or OutOfSync. "+
 				"Useful for a quick health check across all GitOps deployments. "+
-				"Optionally filter by Argo CD project.",
+				"Optionally filter by Argo CD project. "+
+				"[Methodology: Step 0 (what changed) and blast-radius scoping — see docs/methodology.md]",
 		),
 		mcp.WithString("project",
 			mcp.Description("Argo CD project name to filter by (default: all projects)"),

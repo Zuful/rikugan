@@ -424,6 +424,20 @@ Add to your Claude Desktop MCP configuration (`claude_desktop_config.json`):
 
 > **Graceful by design.** Every environment variable above except `KUBECONFIG` is optional. If a token or URL is missing, Rikugan closes that Eye and continues with the rest. Set only what you have — you can start with just Kubernetes and open more Eyes as your stack grows. The server logs which providers were activated and which were skipped at startup, so you always know exactly what's available.
 
+## Investigation Methodology
+
+Rikugan's tools are designed to be used together, not in isolation. The
+playbook the agent should follow when invoked to investigate an incident
+is documented in [`docs/methodology.md`](docs/methodology.md) and centres
+on the **LEST** mnemonic — Latency, Errors, Saturation, Traffic (the
+Four Golden Signals from Google SRE, reordered to be memorable).
+
+Each tool's MCP description references its role in this methodology, so a
+calling agent knows when to reach for each one. Read the doc once to
+internalise the flow ("Step 0: what changed?", LEST, correlation, blast
+radius, read-only first) — it will make the agent's investigations
+materially more structured.
+
 ## Use Cases
 
 ### Incident Triage

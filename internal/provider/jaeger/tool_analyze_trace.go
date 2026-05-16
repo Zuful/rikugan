@@ -22,7 +22,8 @@ func (p *Provider) analyzeTraceTool() provider.ToolDefinition {
 			"Analyze a Jaeger trace and return a synthesized bottleneck report. "+
 				"Identifies the slowest spans and any spans with errors, without "+
 				"returning raw JSON. Useful for pinpointing latency sources and "+
-				"failures in distributed request paths.",
+				"failures in distributed request paths. "+
+				"[Methodology: Latency signal of LEST (anatomy of one slow request) — see docs/methodology.md]",
 		),
 		mcp.WithString("trace_id",
 			mcp.Required(),

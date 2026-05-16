@@ -28,7 +28,10 @@ func (p *Provider) queryRangeTool() provider.ToolDefinition {
 		mcp.WithDescription(
 			"Execute a PromQL range query against Prometheus and return a "+
 				"structured Markdown report with time-series data. "+
-				"Useful for analysing metrics over a time window.",
+				"Useful for analysing metrics over a time window. "+
+				"[Methodology: any LEST signal depending on the PromQL query "+
+				"(Latency via histogram_quantile on duration, Errors via 5xx rate, "+
+				"Saturation via CPU/memory usage, Traffic via request rate) — see docs/methodology.md]",
 		),
 		mcp.WithString("query",
 			mcp.Required(),

@@ -24,7 +24,8 @@ func (p *Provider) getSecurityEventsTool() provider.ToolDefinition {
 		mcp.WithDescription(
 			"Fetch recent Falco security events from Falcosidekick. "+
 				"Can filter by namespace, pod name, and minimum severity. "+
-				"Returns a Markdown table of events with rule, severity, time, and output.",
+				"Returns a Markdown table of events with rule, severity, time, and output. "+
+				"[Methodology: Errors signal of LEST (runtime anomalies) — see docs/methodology.md]",
 		),
 		mcp.WithString("namespace",
 			mcp.Description("Kubernetes namespace to filter events by"),

@@ -45,7 +45,8 @@ func (p *Provider) searchLogsTool() provider.ToolDefinition {
 		mcp.WithDescription(
 			"Search logs in Loki using a LogQL expression. "+
 				"Returns matching log lines with timestamps and stream labels. "+
-				"Useful for finding specific error messages, patterns, or events across services.",
+				"Useful for finding specific error messages, patterns, or events across services. "+
+				"[Methodology: Errors signal of LEST (and Traffic when querying access-log volume) — see docs/methodology.md]",
 		),
 		mcp.WithString("query",
 			mcp.Required(),

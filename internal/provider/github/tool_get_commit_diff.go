@@ -21,7 +21,8 @@ func (p *Provider) getCommitDiffTool() provider.ToolDefinition {
 		mcp.WithDescription(
 			"Fetch the full diff for a specific commit from a GitHub repository. "+
 				"Returns commit metadata and per-file patches. "+
-				"Useful for understanding exactly what code changed in a deploy.",
+				"Useful for understanding exactly what code changed in a deploy. "+
+				"[Methodology: Step 0 (what changed) — see docs/methodology.md]",
 		),
 		mcp.WithString("owner",
 			mcp.Required(),
