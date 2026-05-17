@@ -18,6 +18,7 @@ the deploy 20 minutes ago would have explained in seconds.
 | What was committed in the last N hours? | `github.get_recent_commits`, `gitlab.get_recent_commits` |
 | What does that commit actually change? | `github.get_commit_diff`, `gitlab.get_commit_diff` |
 | Which image is the pod running right now? | `kubernetes.get_image_provenance` |
+| What errors did this release introduce? | `sentry.list_issues_for_release` |
 
 If the timeline of the incident lines up with a deploy or commit, that is your
 prime suspect — pivot the rest of the investigation around verifying or
@@ -53,6 +54,7 @@ What fraction of requests fail? What is failing and why?
 | `rate(http_requests_total{status=~"5.."}[5m])` | `prometheus.query_range` |
 | Pod restart loops, OOMKilled, ImagePullBackOff | `kubernetes.diagnose_pod` |
 | Suspicious runtime behaviour caught by Falco rules | `falco.get_security_events`, `falco.analyze_pod_audit` |
+| Deduplicated application exceptions with stack traces | `sentry.list_recent_issues`, `sentry.get_issue_detail` |
 
 ### S — Saturation
 
@@ -148,9 +150,9 @@ service-level concern.
 
 | Step | Question | Primary tools |
 |------|----------|---------------|
-| 0 | What changed? | argocd, github, gitlab |
+| 0 | What changed? | argocd, github, gitlab, sentry (release attribution) |
 | L | How slow is it? | jaeger, prometheus |
-| E | What is failing? | loki, prometheus, kubernetes, falco |
+| E | What is failing? | loki, prometheus, kubernetes, falco, sentry |
 | S | Are we out of headroom? | prometheus, kubernetes |
 | T | Is the request volume normal? | prometheus, loki |
 | Correlate | Same timestamp, multiple signals | runes |

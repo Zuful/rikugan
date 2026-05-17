@@ -26,6 +26,7 @@ import (
 	"github.com/Zuful/rikugan/internal/provider/loki"
 	"github.com/Zuful/rikugan/internal/provider/prometheus"
 	"github.com/Zuful/rikugan/internal/provider/runes"
+	"github.com/Zuful/rikugan/internal/provider/sentry"
 )
 
 // version is set at build-time via -ldflags.
@@ -142,6 +143,13 @@ func run(logger *slog.Logger) error {
 				return nil, err
 			}
 			return loki.NewFromClient(c, loki.WithLogger(logger)), nil
+		}},
+		{"sentry", func() (provider.Provider, error) {
+			c, err := sentry.BuildClient("", "", "")
+			if err != nil {
+				return nil, err
+			}
+			return sentry.NewFromClient(c, sentry.WithLogger(logger)), nil
 		}},
 	}
 
