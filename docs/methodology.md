@@ -4,6 +4,23 @@ This is the playbook the agent should follow when invoked to investigate an
 infrastructure incident. It is referenced from every Rikugan tool's MCP
 description so any caller can read the canonical version here.
 
+## Step −1 — Incident context
+
+Before anything else, check whether the situation is already known. If an
+incident is open and someone is paged, the rest of the investigation
+should *defer to or assist* that responder, not duplicate their work.
+Similarly, if a service has been firing alerts repeatedly for hours, the
+pattern matters more than the latest one in isolation.
+
+| Question | Tool |
+|----------|------|
+| Is there an active incident open right now? | `pagerduty.list_active_incidents` |
+| Has this service been noisy lately? | `pagerduty.list_service_incidents` |
+| Who do I notify if I find something? | `pagerduty.get_current_oncalls` |
+
+This step is fast and cheap. Skipping it is how you end up parallel-paged
+with the on-call engineer on the same bug.
+
 ## Step 0 — What changed?
 
 **Before looking at any signal, ask: what changed recently?** Empirically the
@@ -150,6 +167,7 @@ service-level concern.
 
 | Step | Question | Primary tools |
 |------|----------|---------------|
+| −1 | Is anyone already on this? | pagerduty |
 | 0 | What changed? | argocd, github, gitlab, sentry (release attribution) |
 | L | How slow is it? | jaeger, prometheus |
 | E | What is failing? | loki, prometheus, kubernetes, falco, sentry |

@@ -324,6 +324,41 @@ Lists unresolved issues first seen in a specific release. Answers *"what did thi
 
 Returns a Markdown table of new issues for the release, with short ID, level, count, users, project, and title. An empty result means *Sentry-side*, nothing new broke with this release.
 
+### PagerDuty Provider
+
+Orthogonal to the LEST signals — PagerDuty is incident management, not observability. Use it as a pre-investigation step ("is someone already on this?") and as a post-investigation step ("who do I notify?").
+
+#### `list_active_incidents`
+
+Lists incidents currently triggered or acknowledged (not yet resolved), optionally filtered by service name.
+
+| Parameter | Type   | Required | Description                                       |
+|-----------|--------|----------|---------------------------------------------------|
+| `service` | string | no       | Service name to filter by (exact match)           |
+
+Returns a table with incident number, status, urgency, creation time, service, current assignee, and title.
+
+#### `list_service_incidents`
+
+Lists incidents (any status, including resolved) raised against a service over a lookback window. Surfaces noisy services and recurring patterns.
+
+| Parameter | Type   | Required | Description                                            |
+|-----------|--------|----------|--------------------------------------------------------|
+| `service` | string | yes      | Service name (exact match)                             |
+| `since`   | string | no       | Lookback duration (e.g. `24h`, `7d`). Default: `24h`   |
+
+Includes a status breakdown header (`triggered=2, acknowledged=1, resolved=5`) so the agent gets a one-glance pattern read.
+
+#### `get_current_oncalls`
+
+Lists who is currently on-call across the org, grouped by escalation policy and ordered by escalation level (primary first).
+
+| Parameter           | Type   | Required | Description                                                   |
+|---------------------|--------|----------|---------------------------------------------------------------|
+| `escalation_policy` | string | no       | Substring filter on the policy name                           |
+
+Returns a section per policy with level, user, schedule, and shift end time.
+
 ## Architecture
 
 ```

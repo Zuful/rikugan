@@ -24,6 +24,7 @@ import (
 	"github.com/Zuful/rikugan/internal/provider/jaeger"
 	"github.com/Zuful/rikugan/internal/provider/kubernetes"
 	"github.com/Zuful/rikugan/internal/provider/loki"
+	"github.com/Zuful/rikugan/internal/provider/pagerduty"
 	"github.com/Zuful/rikugan/internal/provider/prometheus"
 	"github.com/Zuful/rikugan/internal/provider/runes"
 	"github.com/Zuful/rikugan/internal/provider/sentry"
@@ -150,6 +151,13 @@ func run(logger *slog.Logger) error {
 				return nil, err
 			}
 			return sentry.NewFromClient(c, sentry.WithLogger(logger)), nil
+		}},
+		{"pagerduty", func() (provider.Provider, error) {
+			c, err := pagerduty.BuildClient("")
+			if err != nil {
+				return nil, err
+			}
+			return pagerduty.NewFromClient(c, pagerduty.WithLogger(logger)), nil
 		}},
 	}
 
