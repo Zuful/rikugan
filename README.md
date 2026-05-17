@@ -289,6 +289,41 @@ Analyzes recent logs for a service and detects anomalies. Classifies log lines b
 
 Returns a level distribution table (ERROR, WARN, INFO, DEBUG counts and percentages), a summary sentence, top error patterns grouped by normalized message (timestamps, UUIDs, and numbers stripped), and sample error lines. Analysis is based on up to 1000 most recent lines.
 
+### Sentry Provider
+
+#### `list_recent_issues`
+
+Lists recent Sentry issues for a project, ordered by last-seen. An *issue* is a deduplicated group of similar errors — 1000 occurrences of the same exception collapse into one issue with a count.
+
+| Parameter | Type   | Required | Description                                          |
+|-----------|--------|----------|------------------------------------------------------|
+| `project` | string | yes      | Sentry project slug                                  |
+| `query`   | string | no       | Sentry search query (default: `is:unresolved`)       |
+| `limit`   | number | no       | Maximum issues to return (default: 20, max: 100)     |
+
+Returns a Markdown table with short ID, level, occurrence count, users affected, last-seen timestamp, and title. The short ID can be used in the Sentry UI; the numeric ID feeds into `get_issue_detail`.
+
+#### `get_issue_detail`
+
+Fetches the full detail of a single Sentry issue: title, culprit, level, count, first/last seen, the release that first introduced it, and failure metadata (type, function, filename). The release attribution is what makes Sentry uniquely useful — it directly answers *"is this error tied to a recent deploy?"*
+
+| Parameter  | Type   | Required | Description                                              |
+|------------|--------|----------|----------------------------------------------------------|
+| `issue_id` | string | yes      | Numeric Sentry issue ID (not the short ID like `WEB-A12`) |
+
+When the issue has a `firstRelease`, the report ends with a hint pointing the agent at `get_commit_diff` to inspect the changes shipped in that release.
+
+#### `list_issues_for_release`
+
+Lists unresolved issues first seen in a specific release. Answers *"what did this deploy break?"* in one call.
+
+| Parameter | Type   | Required | Description                                         |
+|-----------|--------|----------|-----------------------------------------------------|
+| `version` | string | yes      | Release version (Git SHA, semver tag, or build ID)  |
+| `limit`   | number | no       | Maximum issues to return (default: 25, max: 100)    |
+
+Returns a Markdown table of new issues for the release, with short ID, level, count, users, project, and title. An empty result means *Sentry-side*, nothing new broke with this release.
+
 ## Architecture
 
 ```
