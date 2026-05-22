@@ -1,49 +1,49 @@
-# golangci-lint configuration for rikugan.
+# golangci-lint v2 configuration for rikugan.
 #
 # Conservative default — enables the linters that catch real bugs (govet,
-# staticcheck, errcheck) and idiomatic-Go violations (revive, gosimple,
-# unused), without the opinionated style noise that breaks contributors'
-# flow. Loosen/tighten as needed; for the full rationale and a per-linter
+# staticcheck, errcheck) and idiomatic-Go violations (revive, unused),
+# without the opinionated style noise that breaks contributors' flow.
+# Formatters (gofmt, goimports) live under their own top-level key in v2.
+# Loosen/tighten as needed; for the full rationale and a per-linter
 # breakdown, see the samber/cc-skills-golang@golang-lint skill.
+
+version: "2"
 
 run:
   timeout: 5m
   tests: true
 
 linters:
-  disable-all: true
+  default: none
   enable:
     - errcheck       # unchecked errors
     - govet          # vet's static analysis
     - ineffassign    # ineffective assignments
-    - staticcheck    # staticcheck — catches a lot of real bugs
+    - staticcheck    # catches a lot of real bugs (includes ex-gosimple checks)
     - unused         # unused vars, funcs, types
-    - gosimple       # suggests simpler Go idioms
-    - gofmt          # formatting
-    - goimports      # import grouping and ordering
     - misspell       # English spelling
-    - revive         # replacement for golint
+    - revive         # idiomatic-Go linter (replacement for golint)
     - unconvert      # unnecessary type conversions
     - unparam        # unused function parameters
-
-linters-settings:
-  revive:
+  settings:
+    revive:
+      rules:
+        - name: var-naming
+        - name: package-comments
+        - name: exported
+          arguments:
+            - "disableStutteringCheck" # audited manually in PR #1
+    misspell:
+      locale: US
+  exclusions:
     rules:
-      - name: var-naming
-      - name: package-comments
-      - name: exported
-        arguments:
-          - "disableStutteringCheck" # we already audit stuttering manually
-  misspell:
-    locale: US
+      # Test files can be looser.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - unparam
 
-issues:
-  exclude-use-default: false
-  max-issues-per-linter: 0
-  max-same-issues: 0
-  exclude-rules:
-    # Test files can be looser.
-    - path: _test\.go
-      linters:
-        - errcheck
-        - unparam
+formatters:
+  enable:
+    - gofmt
+    - goimports
