@@ -72,6 +72,7 @@ type Metadata struct {
 	Function string `json:"function"`
 }
 
+// Release is the deploy version that a Sentry issue is attributed to.
 type Release struct {
 	Version string    `json:"version"`
 	Created time.Time `json:"dateCreated"`

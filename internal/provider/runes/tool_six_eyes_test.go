@@ -304,7 +304,7 @@ func TestHandleSixEyes_PartialPrometheusFailure(t *testing.T) {
 		}},
 	)
 
-	cpuQuery := fmt.Sprintf(`rate(container_cpu_usage_seconds_total{namespace="default",pod="test-pod",container!=""}[5m])`)
+	cpuQuery := `rate(container_cpu_usage_seconds_total{namespace="default",pod="test-pod",container!=""}[5m])`
 	responses := map[string]mockResponse{
 		cpuQuery: {err: fmt.Errorf("connection refused")},
 	}

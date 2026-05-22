@@ -237,7 +237,7 @@ func writeEventsSection(b *strings.Builder, events []corev1.Event) {
 
 	// Sort by last timestamp descending
 	sort.Slice(events, func(i, j int) bool {
-		return events[i].LastTimestamp.Time.After(events[j].LastTimestamp.Time)
+		return events[i].LastTimestamp.After(events[j].LastTimestamp.Time)
 	})
 
 	limit := 20

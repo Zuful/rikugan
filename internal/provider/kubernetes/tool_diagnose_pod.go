@@ -314,7 +314,7 @@ func (p *Provider) writeContainerStatusSection(b *strings.Builder, pod *corev1.P
 func describeContainerState(cs corev1.ContainerStatus) (string, string) {
 	switch {
 	case cs.State.Running != nil:
-		return "Running", fmt.Sprintf("since %s", cs.State.Running.StartedAt.Time.Format(time.RFC3339))
+		return "Running", fmt.Sprintf("since %s", cs.State.Running.StartedAt.Format(time.RFC3339))
 	case cs.State.Waiting != nil:
 		return "Waiting", cs.State.Waiting.Reason + ": " + cs.State.Waiting.Message
 	case cs.State.Terminated != nil:
