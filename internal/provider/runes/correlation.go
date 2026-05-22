@@ -10,6 +10,8 @@ import (
 // Severity represents the severity level of a finding.
 type Severity int
 
+// Severity levels surfaced in correlated findings, ordered from least
+// to most urgent.
 const (
 	INFO Severity = iota
 	MEDIUM

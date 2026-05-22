@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -172,9 +173,14 @@ func formatLabels(labels map[string]string) string {
 }
 
 // parseNanoTimestamp parses a nanosecond-epoch string into time.Time.
+// On parse failure the zero time is returned — Loki never sends bad
+// timestamps in practice, so dropping the error keeps the call site
+// pleasant to read.
 func parseNanoTimestamp(ns string) time.Time {
-	var nanos int64
-	fmt.Sscanf(ns, "%d", &nanos)
+	nanos, err := strconv.ParseInt(ns, 10, 64)
+	if err != nil {
+		return time.Time{}
+	}
 	return time.Unix(0, nanos)
 }
 

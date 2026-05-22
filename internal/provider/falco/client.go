@@ -33,13 +33,13 @@ func NewClient(baseURL string) *Client {
 
 // Event represents a single Falco security event.
 type Event struct {
-	Time         time.Time         `json:"time"`
-	Rule         string            `json:"rule"`
-	Priority     string            `json:"priority"`
-	Output       string            `json:"output"`
-	Source       string            `json:"source"`
-	OutputFields map[string]any    `json:"output_fields"`
-	Tags         []string          `json:"tags"`
+	Time         time.Time      `json:"time"`
+	Rule         string         `json:"rule"`
+	Priority     string         `json:"priority"`
+	Output       string         `json:"output"`
+	Source       string         `json:"source"`
+	OutputFields map[string]any `json:"output_fields"`
+	Tags         []string       `json:"tags"`
 }
 
 // ── API methods ─────────────────────────────────────────────────────────────

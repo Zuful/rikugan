@@ -152,7 +152,7 @@ func (c *Client) doJSON(ctx context.Context, path string, params url.Values, dst
 	if err != nil {
 		return fmt.Errorf("pagerduty request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	switch {
 	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:

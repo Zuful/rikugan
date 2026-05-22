@@ -12,10 +12,10 @@ import (
 	"github.com/Zuful/rikugan/internal/provider"
 )
 
-// Provider implements provider.Provider for Jaeger backends.
 // Compile-time check that *Provider satisfies provider.Provider.
 var _ provider.Provider = (*Provider)(nil)
 
+// Provider implements provider.Provider for Jaeger backends.
 type Provider struct {
 	client *Client
 	logger *slog.Logger

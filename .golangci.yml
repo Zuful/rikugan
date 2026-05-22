@@ -34,7 +34,8 @@ linters:
           arguments:
             - "disableStutteringCheck" # audited manually in PR #1
     misspell:
-      locale: US
+      locale: UK # codebase uses British English throughout (organisation,
+                 # initialised, analyse, …) — keep that consistent.
   exclusions:
     rules:
       # Test files can be looser.

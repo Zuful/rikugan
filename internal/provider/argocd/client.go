@@ -55,8 +55,8 @@ type Application struct {
 			Message string `json:"message"`
 		} `json:"health"`
 		OperationState *struct {
-			Phase   string `json:"phase"`
-			Message string `json:"message"`
+			Phase      string `json:"phase"`
+			Message    string `json:"message"`
 			SyncResult *struct {
 				Revision string `json:"revision"`
 			} `json:"syncResult"`

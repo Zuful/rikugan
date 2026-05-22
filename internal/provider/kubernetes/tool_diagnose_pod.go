@@ -198,7 +198,7 @@ func (p *Provider) readLog(
 	if err != nil {
 		return fmt.Sprintf("[error fetching logs: %v]", err)
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	var buf bytes.Buffer
 	if _, err = io.Copy(&buf, stream); err != nil {
