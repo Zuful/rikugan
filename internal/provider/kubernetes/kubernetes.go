@@ -101,6 +101,9 @@ func buildConfig(explicit string) (*rest.Config, string, error) {
 
 	// 2. KUBECONFIG env
 	if env := os.Getenv("KUBECONFIG"); env != "" {
+		// #nosec G703 -- KUBECONFIG is the canonical Kubernetes env var
+		// for pointing at a kubeconfig file; reading the path the user
+		// set themselves is the intended behaviour.
 		if _, err := os.Stat(env); err != nil {
 			return nil, "", fmt.Errorf("KUBECONFIG=%q: %w", env, err)
 		}

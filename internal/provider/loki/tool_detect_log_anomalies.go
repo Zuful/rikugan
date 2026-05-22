@@ -15,9 +15,9 @@ import (
 )
 
 const (
-	anomalyLimit      = 1000
-	maxErrorPatterns  = 10
-	maxSampleLines    = 5
+	anomalyLimit     = 1000
+	maxErrorPatterns = 10
+	maxSampleLines   = 5
 )
 
 // detectLogAnomaliesTool returns the ToolDefinition for detect_log_anomalies.

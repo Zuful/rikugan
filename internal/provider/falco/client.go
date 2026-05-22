@@ -33,13 +33,13 @@ func NewClient(baseURL string) *Client {
 
 // Event represents a single Falco security event.
 type Event struct {
-	Time         time.Time         `json:"time"`
-	Rule         string            `json:"rule"`
-	Priority     string            `json:"priority"`
-	Output       string            `json:"output"`
-	Source       string            `json:"source"`
-	OutputFields map[string]any    `json:"output_fields"`
-	Tags         []string          `json:"tags"`
+	Time         time.Time      `json:"time"`
+	Rule         string         `json:"rule"`
+	Priority     string         `json:"priority"`
+	Output       string         `json:"output"`
+	Source       string         `json:"source"`
+	OutputFields map[string]any `json:"output_fields"`
+	Tags         []string       `json:"tags"`
 }
 
 // ── API methods ─────────────────────────────────────────────────────────────
@@ -77,7 +77,7 @@ func (c *Client) doJSON(ctx context.Context, url string, dst any) error {
 	if err != nil {
 		return fmt.Errorf("falcosidekick request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))

@@ -198,7 +198,7 @@ func (p *Provider) readLog(
 	if err != nil {
 		return fmt.Sprintf("[error fetching logs: %v]", err)
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	var buf bytes.Buffer
 	if _, err = io.Copy(&buf, stream); err != nil {
@@ -314,7 +314,7 @@ func (p *Provider) writeContainerStatusSection(b *strings.Builder, pod *corev1.P
 func describeContainerState(cs corev1.ContainerStatus) (string, string) {
 	switch {
 	case cs.State.Running != nil:
-		return "Running", fmt.Sprintf("since %s", cs.State.Running.StartedAt.Time.Format(time.RFC3339))
+		return "Running", fmt.Sprintf("since %s", cs.State.Running.StartedAt.Format(time.RFC3339))
 	case cs.State.Waiting != nil:
 		return "Waiting", cs.State.Waiting.Reason + ": " + cs.State.Waiting.Message
 	case cs.State.Terminated != nil:

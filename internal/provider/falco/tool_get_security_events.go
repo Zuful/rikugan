@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	opTimeout      = 30 * time.Second
+	opTimeout       = 30 * time.Second
 	defaultLookback = 24 * time.Hour
 	maxEvents       = 50
 )

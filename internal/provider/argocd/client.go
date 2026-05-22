@@ -55,8 +55,8 @@ type Application struct {
 			Message string `json:"message"`
 		} `json:"health"`
 		OperationState *struct {
-			Phase   string `json:"phase"`
-			Message string `json:"message"`
+			Phase      string `json:"phase"`
+			Message    string `json:"message"`
 			SyncResult *struct {
 				Revision string `json:"revision"`
 			} `json:"syncResult"`
@@ -102,7 +102,7 @@ func (c *Client) doJSON(ctx context.Context, url string, dst any) error {
 	if err != nil {
 		return fmt.Errorf("argocd request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))

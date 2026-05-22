@@ -57,11 +57,14 @@ type Issue struct {
 	FirstRelease *Release  `json:"firstRelease,omitempty"`
 }
 
+// Project is the Sentry project an issue belongs to.
 type Project struct {
 	Slug string `json:"slug"`
 	Name string `json:"name"`
 }
 
+// Metadata is Sentry's compact failure summary attached to an issue
+// (exception type, value, filename, function).
 type Metadata struct {
 	Type     string `json:"type"`
 	Value    string `json:"value"`
@@ -69,6 +72,7 @@ type Metadata struct {
 	Function string `json:"function"`
 }
 
+// Release is the deploy version that a Sentry issue is attributed to.
 type Release struct {
 	Version string    `json:"version"`
 	Created time.Time `json:"dateCreated"`
@@ -145,7 +149,7 @@ func (c *Client) doJSON(ctx context.Context, path string, params url.Values, dst
 	if err != nil {
 		return fmt.Errorf("sentry request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	switch {
 	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:

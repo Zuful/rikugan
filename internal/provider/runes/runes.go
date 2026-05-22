@@ -13,13 +13,13 @@ import (
 	"github.com/Zuful/rikugan/internal/provider"
 )
 
-// Provider implements provider.Provider by correlating K8s and Prometheus data.
 // Compile-time check that *Provider satisfies provider.Provider.
 var _ provider.Provider = (*Provider)(nil)
 
+// Provider implements provider.Provider by correlating K8s and Prometheus data.
 type Provider struct {
-	k8s  kubernetes.Interface
-	prom promv1.API
+	k8s    kubernetes.Interface
+	prom   promv1.API
 	logger *slog.Logger
 }
 

@@ -16,10 +16,10 @@ import (
 	"github.com/Zuful/rikugan/internal/provider"
 )
 
-// Provider implements provider.Provider for GitHub backends.
 // Compile-time check that *Provider satisfies provider.Provider.
 var _ provider.Provider = (*Provider)(nil)
 
+// Provider implements provider.Provider for GitHub backends.
 type Provider struct {
 	client *gh.Client
 	logger *slog.Logger
