@@ -21,7 +21,10 @@ linters:
     - ineffassign    # ineffective assignments
     - staticcheck    # catches a lot of real bugs (includes ex-gosimple checks)
     - unused         # unused vars, funcs, types
-    - misspell       # English spelling
+    # misspell intentionally disabled: the codebase mixes British and
+    # American spellings (analyse/analyze, centre/center, organisation/
+    # organization …). Neither locale gives a clean signal until a
+    # consistency pass is done; until then the linter is noise.
     - revive         # idiomatic-Go linter (replacement for golint)
     - unconvert      # unnecessary type conversions
     - unparam        # unused function parameters
@@ -33,9 +36,6 @@ linters:
         - name: exported
           arguments:
             - "disableStutteringCheck" # audited manually in PR #1
-    misspell:
-      locale: UK # codebase uses British English throughout (organisation,
-                 # initialised, analyse, …) — keep that consistent.
   exclusions:
     rules:
       # Test files can be looser.

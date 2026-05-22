@@ -553,7 +553,7 @@ func TestCorrelate_Healthy(t *testing.T) {
 
 func TestCorrelate_SortsBySeverityDescending(t *testing.T) {
 	pod := makePod("default", "test", corev1.PodRunning,
-		[]corev1.Container{{Name: "app", }, {Name: "sidecar"}},
+		[]corev1.Container{{Name: "app"}, {Name: "sidecar"}},
 		[]corev1.ContainerStatus{
 			{
 				Name: "app",

@@ -37,16 +37,16 @@ func NewClient(token string) *Client {
 
 // Incident is a single PagerDuty incident.
 type Incident struct {
-	ID               string    `json:"id"`
-	IncidentNumber   int       `json:"incident_number"`
-	Title            string    `json:"title"`
-	Description      string    `json:"description"`
-	Status           string    `json:"status"`
-	Urgency          string    `json:"urgency"`
-	CreatedAt        time.Time `json:"created_at"`
-	LastStatusChange time.Time `json:"last_status_change_at"`
-	HTMLURL          string    `json:"html_url"`
-	Service          Reference `json:"service"`
+	ID               string       `json:"id"`
+	IncidentNumber   int          `json:"incident_number"`
+	Title            string       `json:"title"`
+	Description      string       `json:"description"`
+	Status           string       `json:"status"`
+	Urgency          string       `json:"urgency"`
+	CreatedAt        time.Time    `json:"created_at"`
+	LastStatusChange time.Time    `json:"last_status_change_at"`
+	HTMLURL          string       `json:"html_url"`
+	Service          Reference    `json:"service"`
 	Assignments      []Assignment `json:"assignments"`
 }
 
@@ -68,19 +68,19 @@ type Assignment struct {
 
 // Service is a PagerDuty service (what triggers incidents).
 type Service struct {
-	ID                string    `json:"id"`
-	Name              string    `json:"name"`
-	Status            string    `json:"status"`
-	HTMLURL           string    `json:"html_url"`
-	EscalationPolicy  Reference `json:"escalation_policy"`
+	ID               string    `json:"id"`
+	Name             string    `json:"name"`
+	Status           string    `json:"status"`
+	HTMLURL          string    `json:"html_url"`
+	EscalationPolicy Reference `json:"escalation_policy"`
 }
 
 // Oncall represents one current on-call assignment.
 type Oncall struct {
-	EscalationPolicy Reference `json:"escalation_policy"`
-	EscalationLevel  int       `json:"escalation_level"`
+	EscalationPolicy Reference  `json:"escalation_policy"`
+	EscalationLevel  int        `json:"escalation_level"`
 	Schedule         *Reference `json:"schedule,omitempty"`
-	User             Reference `json:"user"`
+	User             Reference  `json:"user"`
 	Start            *time.Time `json:"start,omitempty"`
 	End              *time.Time `json:"end,omitempty"`
 }

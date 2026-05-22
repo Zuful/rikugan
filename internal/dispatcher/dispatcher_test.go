@@ -17,7 +17,7 @@ type stubProvider struct {
 	tools []provider.ToolDefinition
 }
 
-func (s *stubProvider) Name() string                   { return s.name }
+func (s *stubProvider) Name() string                     { return s.name }
 func (s *stubProvider) Tools() []provider.ToolDefinition { return s.tools }
 
 func noopHandler(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {

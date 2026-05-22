@@ -77,7 +77,7 @@ func (c *Client) doJSON(ctx context.Context, url string, dst any) error {
 	if err != nil {
 		return fmt.Errorf("falcosidekick request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))

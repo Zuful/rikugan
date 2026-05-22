@@ -18,8 +18,8 @@ import (
 var _ provider.Provider = (*Provider)(nil)
 
 type Provider struct {
-	k8s  kubernetes.Interface
-	prom promv1.API
+	k8s    kubernetes.Interface
+	prom   promv1.API
 	logger *slog.Logger
 }
 
