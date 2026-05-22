@@ -1,0 +1,41 @@
+# Compiled binaries (any name produced by `go build` or `make build`).
+bin/
+dist/
+/rikugan
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`.
+*.test
+
+# Coverage output (from `make test`).
+*.out
+coverage.out
+coverage.html
+
+# Dependency directories.
+vendor/
+
+# Go workspace state.
+go.work
+go.work.sum
+
+# IDE & editor cruft.
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment files (the agent reads from env vars; never commit secrets).
+.env
+.env.local
+.env.*.local
+
+# Build / hot-reload scratch space.
+/tmp/
+tmp/
