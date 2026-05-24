@@ -11,10 +11,12 @@ import (
 	"time"
 )
 
-const (
-	baseURL       = "https://api.pagerduty.com"
-	clientTimeout = 30 * time.Second
-)
+const clientTimeout = 30 * time.Second
+
+// baseURL is the PagerDuty API root. It's a var rather than a const so
+// tests can swap it for an httptest.Server URL; production code never
+// overrides it.
+var baseURL = "https://api.pagerduty.com"
 
 // Client is a thin wrapper around the PagerDuty REST API.
 type Client struct {
