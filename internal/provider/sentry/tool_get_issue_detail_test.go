@@ -26,13 +26,13 @@ func TestBuildIssueDetailReport_AlwaysPresentFields(t *testing.T) {
 	report := buildIssueDetailReport(newTestIssue())
 
 	mustContain := []string{
-		"## Sentry Issue `WEB-A12`",          // header
-		"`987654321`",                        // numeric ID
-		"| Level | error |",                  // level row
-		"| Status | unresolved |",            // status row
-		"| Project | web |",                  // project slug
-		"| Count | 42 |",                     // count
-		"| Users affected | 3 |",             // users
+		"## Sentry Issue `WEB-A12`", // header
+		"`987654321`",               // numeric ID
+		"| Level | error |",         // level row
+		"| Status | unresolved |",   // status row
+		"| Project | web |",         // project slug
+		"| Count | 42 |",            // count
+		"| Users affected | 3 |",    // users
 	}
 	for _, want := range mustContain {
 		if !strings.Contains(report, want) {
