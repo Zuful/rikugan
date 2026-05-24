@@ -4,16 +4,17 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/Zuful/rikugan/internal/dispatcher"
-	"github.com/Zuful/rikugan/internal/provider"
-	"github.com/Zuful/rikugan/internal/provider/argocd"
-	"github.com/Zuful/rikugan/internal/provider/falco"
-	"github.com/Zuful/rikugan/internal/provider/github"
-	"github.com/Zuful/rikugan/internal/provider/gitlab"
-	"github.com/Zuful/rikugan/internal/provider/jaeger"
-	"github.com/Zuful/rikugan/internal/provider/loki"
-	"github.com/Zuful/rikugan/internal/provider/pagerduty"
-	"github.com/Zuful/rikugan/internal/provider/sentry"
+	"github.com/Zuful/rikugan/internal/alerts/alertmanager"
+	"github.com/Zuful/rikugan/internal/alerts/pagerduty"
+	"github.com/Zuful/rikugan/internal/alerts/sentry"
+	"github.com/Zuful/rikugan/internal/logs/loki"
+	"github.com/Zuful/rikugan/internal/security/falco"
+	"github.com/Zuful/rikugan/internal/tracing/jaeger"
+	"github.com/Zuful/rikugan/internal/versioning/argocd"
+	"github.com/Zuful/rikugan/internal/versioning/github"
+	"github.com/Zuful/rikugan/internal/versioning/gitlab"
+	"github.com/Zuful/rikugan/pkg/dispatcher"
+	"github.com/Zuful/rikugan/pkg/provider"
 )
 
 // optionalProvider couples a human-readable name with a closure that
@@ -88,6 +89,13 @@ func optionalProviders(logger *slog.Logger) []optionalProvider {
 				return nil, err
 			}
 			return pagerduty.NewFromClient(c, pagerduty.WithLogger(logger)), nil
+		}},
+		{"alertmanager", func() (provider.Provider, error) {
+			c, err := alertmanager.BuildClient("")
+			if err != nil {
+				return nil, err
+			}
+			return alertmanager.NewFromClient(c, alertmanager.WithLogger(logger)), nil
 		}},
 	}
 }
