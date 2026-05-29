@@ -42,6 +42,7 @@ func (f *fakeLogs) SearchLogs(_ context.Context, q provider.LogQuery) ([]provide
 }
 
 func TestConceptProvider_RegistersThreeCanonicalTools(t *testing.T) {
+	t.Parallel()
 	cp := NewConceptProvider(&fakeLogs{}, "fake", nil)
 	got := make(map[string]bool)
 	for _, td := range cp.Tools() {
@@ -58,6 +59,7 @@ func TestConceptProvider_RegistersThreeCanonicalTools(t *testing.T) {
 }
 
 func TestBuildLogsReport_RendersHeaderAndTable(t *testing.T) {
+	t.Parallel()
 	entries := []provider.LogEntry{
 		{
 			Time:    time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC),
@@ -90,6 +92,7 @@ func TestBuildLogsReport_RendersHeaderAndTable(t *testing.T) {
 }
 
 func TestBuildLogsReport_EmptyEntriesProducesNoneMarker(t *testing.T) {
+	t.Parallel()
 	report := buildLogsReport("Search Logs", "loki", provider.LogQuery{
 		Match: "boom",
 		Start: time.Now().Add(-time.Hour),
@@ -104,6 +107,7 @@ func TestBuildLogsReport_EmptyEntriesProducesNoneMarker(t *testing.T) {
 }
 
 func TestCompactLabels_DeterministicOrder(t *testing.T) {
+	t.Parallel()
 	got := compactLabels(map[string]string{"z": "1", "a": "2", "m": "3"})
 	want := "a=2, m=3, z=1"
 	if got != want {

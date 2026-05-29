@@ -46,6 +46,7 @@ func fakeLokiServer(t *testing.T, cap *captured) *httptest.Server {
 }
 
 func TestProvider_GetLogs_BuildsLogQLFromServiceAndNamespace(t *testing.T) {
+	t.Parallel()
 	cap := &captured{}
 	srv := fakeLokiServer(t, cap)
 	defer srv.Close()
@@ -79,6 +80,7 @@ func TestProvider_GetLogs_BuildsLogQLFromServiceAndNamespace(t *testing.T) {
 }
 
 func TestProvider_GetLogs_AppendsMatchAsFilter(t *testing.T) {
+	t.Parallel()
 	cap := &captured{}
 	srv := fakeLokiServer(t, cap)
 	defer srv.Close()
@@ -98,6 +100,7 @@ func TestProvider_GetLogs_AppendsMatchAsFilter(t *testing.T) {
 }
 
 func TestProvider_GetLogs_PassesRawLogQLWhenMatchStartsWithBrace(t *testing.T) {
+	t.Parallel()
 	cap := &captured{}
 	srv := fakeLokiServer(t, cap)
 	defer srv.Close()
@@ -114,6 +117,7 @@ func TestProvider_GetLogs_PassesRawLogQLWhenMatchStartsWithBrace(t *testing.T) {
 }
 
 func TestProvider_GetLogs_ClampsLimitToMax(t *testing.T) {
+	t.Parallel()
 	cap := &captured{}
 	srv := fakeLokiServer(t, cap)
 	defer srv.Close()
@@ -132,6 +136,7 @@ func TestProvider_GetLogs_ClampsLimitToMax(t *testing.T) {
 }
 
 func TestProvider_SearchLogs_RejectsEmptyScope(t *testing.T) {
+	t.Parallel()
 	p := NewFromClient(NewClient("http://unreachable"))
 	_, err := p.SearchLogs(context.Background(), provider.LogQuery{})
 	if err == nil {
@@ -140,6 +145,7 @@ func TestProvider_SearchLogs_RejectsEmptyScope(t *testing.T) {
 }
 
 func TestProvider_SatisfiesLogsProviderInterface(t *testing.T) {
+	t.Parallel()
 	// Compile-time guarantee is in logsprovider.go; this test exists so
 	// `go test ./...` fails loudly with a clear stack if a future change
 	// makes Provider drift away from the LogsProvider contract.

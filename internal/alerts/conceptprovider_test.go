@@ -34,6 +34,7 @@ func (f *fakeAlerts) GetAlertDetails(_ context.Context, id string) (provider.Ale
 }
 
 func TestConceptProvider_RegistersTwoCanonicalTools(t *testing.T) {
+	t.Parallel()
 	cp := NewConceptProvider(&fakeAlerts{}, "fake", nil)
 	names := map[string]bool{}
 	for _, td := range cp.Tools() {
@@ -50,6 +51,7 @@ func TestConceptProvider_RegistersTwoCanonicalTools(t *testing.T) {
 }
 
 func TestBuildListAlertsReport_SortsBySeverityThenStartedAt(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
 	alerts := []provider.Alert{
 		{ID: "1", Title: "info-event", Severity: "info", State: "firing", StartedAt: now},
@@ -76,6 +78,7 @@ func TestBuildListAlertsReport_SortsBySeverityThenStartedAt(t *testing.T) {
 }
 
 func TestBuildListAlertsReport_EmptyShowsNoAlertsMarker(t *testing.T) {
+	t.Parallel()
 	report := buildListAlertsReport("pagerduty", "", nil)
 	if !strings.Contains(report, "_No active alerts._") {
 		t.Errorf("missing empty marker:\n%s", report)
@@ -83,6 +86,7 @@ func TestBuildListAlertsReport_EmptyShowsNoAlertsMarker(t *testing.T) {
 }
 
 func TestBuildAlertDetailReport_SerializesExtrasAsJSON(t *testing.T) {
+	t.Parallel()
 	a := provider.Alert{
 		ID:        "fp-123",
 		Title:     "HighErrorRate",
@@ -112,6 +116,7 @@ func TestBuildAlertDetailReport_SerializesExtrasAsJSON(t *testing.T) {
 }
 
 func TestSeverityRank_OrderingIsStable(t *testing.T) {
+	t.Parallel()
 	if severityRank("critical") <= severityRank("warning") {
 		t.Errorf("critical must outrank warning")
 	}

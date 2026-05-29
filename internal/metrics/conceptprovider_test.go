@@ -32,6 +32,7 @@ func (f *fakeMetrics) ListAvailableMetrics(_ context.Context, _ string) ([]strin
 }
 
 func TestConceptProvider_ExposesThreeCanonicalTools(t *testing.T) {
+	t.Parallel()
 	cp := NewConceptProvider(&fakeMetrics{}, "fake", nil)
 	names := map[string]bool{}
 	for _, td := range cp.Tools() {
@@ -48,6 +49,7 @@ func TestConceptProvider_ExposesThreeCanonicalTools(t *testing.T) {
 }
 
 func TestBuildGetMetricReport_GroupsByLabelFingerprint(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
 	samples := []provider.MetricSample{
 		{Time: now, Labels: map[string]string{"job": "api"}, Value: 1},
@@ -69,6 +71,7 @@ func TestBuildGetMetricReport_GroupsByLabelFingerprint(t *testing.T) {
 }
 
 func TestBuildGetMetricReport_EmptyShowsNoSamplesMarker(t *testing.T) {
+	t.Parallel()
 	report := buildGetMetricReport("prometheus", "up", time.Now(), time.Now(), time.Second, nil)
 	if !strings.Contains(report, "_No samples returned._") {
 		t.Errorf("missing empty marker:\n%s", report)
@@ -76,6 +79,7 @@ func TestBuildGetMetricReport_EmptyShowsNoSamplesMarker(t *testing.T) {
 }
 
 func TestBuildListMetricsReport_EmitsBackendAndPrefix(t *testing.T) {
+	t.Parallel()
 	report := buildListMetricsReport("prometheus", "http_", []string{"http_a", "http_b"})
 	for _, want := range []string{
 		"## Available Metrics",
@@ -92,6 +96,7 @@ func TestBuildListMetricsReport_EmitsBackendAndPrefix(t *testing.T) {
 }
 
 func TestFingerprintLabels_StableAcrossMaps(t *testing.T) {
+	t.Parallel()
 	a := fingerprintLabels(map[string]string{"x": "1", "y": "2"})
 	b := fingerprintLabels(map[string]string{"y": "2", "x": "1"})
 	if a != b {

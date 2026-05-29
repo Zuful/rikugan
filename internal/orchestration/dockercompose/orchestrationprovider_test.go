@@ -42,6 +42,7 @@ const composePSNDJSON = `{"ID":"c1","Name":"web_api_1","Project":"web","Service"
 {"ID":"c3","Name":"web_worker_1","Project":"web","Service":"worker","State":"exited","ExitCode":1,"Image":"worker:2.3","Created":1699999000}`
 
 func TestProvider_ListServices_CollapsesReplicasIntoOneService(t *testing.T) {
+	t.Parallel()
 	r := &stubRunner{responses: map[string]string{"compose": composePSNDJSON}}
 	p := New(WithRunner(r))
 	svcs, err := p.ListServices(context.Background(), "web")
@@ -66,6 +67,7 @@ func TestProvider_ListServices_CollapsesReplicasIntoOneService(t *testing.T) {
 }
 
 func TestProvider_GetServiceState_DegradedOnUnhealthyReplica(t *testing.T) {
+	t.Parallel()
 	r := &stubRunner{responses: map[string]string{"compose": composePSNDJSON}}
 	p := New(WithRunner(r))
 	state, err := p.GetServiceState(context.Background(), provider.Service{Name: "api", Namespace: "web"})
@@ -84,6 +86,7 @@ func TestProvider_GetServiceState_DegradedOnUnhealthyReplica(t *testing.T) {
 }
 
 func TestProvider_GetServiceState_FailedOnExitedReplica(t *testing.T) {
+	t.Parallel()
 	r := &stubRunner{responses: map[string]string{"compose": composePSNDJSON}}
 	p := New(WithRunner(r))
 	state, err := p.GetServiceState(context.Background(), provider.Service{Name: "worker", Namespace: "web"})
@@ -96,6 +99,7 @@ func TestProvider_GetServiceState_FailedOnExitedReplica(t *testing.T) {
 }
 
 func TestProvider_GetServiceState_UnknownWhenNoContainers(t *testing.T) {
+	t.Parallel()
 	r := &stubRunner{responses: map[string]string{"compose": ""}}
 	p := New(WithRunner(r))
 	state, err := p.GetServiceState(context.Background(), provider.Service{Name: "missing", Namespace: "web"})
@@ -108,6 +112,7 @@ func TestProvider_GetServiceState_UnknownWhenNoContainers(t *testing.T) {
 }
 
 func TestProvider_RestartService_InvokesDockerComposeRestart(t *testing.T) {
+	t.Parallel()
 	r := &stubRunner{responses: map[string]string{}}
 	p := New(WithRunner(r))
 	if err := p.RestartService(context.Background(), provider.Service{Name: "api", Namespace: "web"}); err != nil {
@@ -126,6 +131,7 @@ func TestProvider_RestartService_InvokesDockerComposeRestart(t *testing.T) {
 }
 
 func TestProvider_GetServiceHistory_GracefullyDegradesWithExplanation(t *testing.T) {
+	t.Parallel()
 	r := &stubRunner{responses: map[string]string{"compose": composePSNDJSON}}
 	p := New(WithRunner(r))
 	report, err := p.GetServiceHistory(context.Background(), provider.Service{Name: "api", Namespace: "web"})
@@ -145,6 +151,7 @@ func TestProvider_GetServiceHistory_GracefullyDegradesWithExplanation(t *testing
 }
 
 func TestProvider_GetRecentEvents_ParsesDockerNDJSON(t *testing.T) {
+	t.Parallel()
 	composeOut := `{"ID":"c1","Name":"web_api_1","Project":"web","Service":"api","State":"running","Image":"api:1.0"}`
 	eventsOut := `{"Type":"container","Action":"die","time":1700000200,"Actor":{"ID":"c1","Attributes":{"name":"web_api_1"}}}
 {"Type":"container","Action":"start","time":1700000210,"Actor":{"ID":"c1","Attributes":{"name":"web_api_1"}}}`
@@ -169,12 +176,14 @@ func TestProvider_GetRecentEvents_ParsesDockerNDJSON(t *testing.T) {
 }
 
 func TestProvider_SatisfiesOrchestrationProviderInterface(t *testing.T) {
+	t.Parallel()
 	// Compile-time check is in dockercompose.go; this guard exists so
 	// `go test` flags any future drift from the interface contract.
 	var _ provider.OrchestrationProvider = (*Provider)(nil)
 }
 
 func TestParseComposePS_HandlesArrayForm(t *testing.T) {
+	t.Parallel()
 	arr := `[{"ID":"x","Project":"p","Service":"s","State":"running","Image":"img"}]`
 	got := parseComposePS([]byte(arr))
 	if len(got) != 1 || got[0].Service != "s" {

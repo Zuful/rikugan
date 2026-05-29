@@ -2,6 +2,7 @@ package prometheus
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -49,6 +50,7 @@ func matrixWith(samples ...float64) model.Matrix {
 }
 
 func TestProvider_GetMetric_FlattensMatrixToSamples(t *testing.T) {
+	t.Parallel()
 	api := &fakeAPI{queryResult: matrixWith(1, 2, 3)}
 	p := NewFromAPI(api)
 	got, err := p.GetMetric(context.Background(), `up{job="api"}`, time.Unix(0, 0), time.Unix(10, 0), 5*time.Second)
@@ -73,6 +75,7 @@ func TestProvider_GetMetric_FlattensMatrixToSamples(t *testing.T) {
 }
 
 func TestProvider_GetMetric_DefaultStepWhenNonPositive(t *testing.T) {
+	t.Parallel()
 	api := &fakeAPI{queryResult: model.Matrix{}}
 	p := NewFromAPI(api)
 	if _, err := p.GetMetric(context.Background(), "x", time.Unix(0, 0), time.Unix(1, 0), 0); err != nil {
@@ -84,6 +87,7 @@ func TestProvider_GetMetric_DefaultStepWhenNonPositive(t *testing.T) {
 }
 
 func TestProvider_CompareToBaseline_ProducesDeltaReport(t *testing.T) {
+	t.Parallel()
 	// First call (current window) returns mean ~2, second (baseline) returns mean ~1.
 	// The fake API returns the same response for both calls; we test the
 	// markdown shape rather than the delta arithmetic precision.
@@ -100,13 +104,14 @@ func TestProvider_CompareToBaseline_ProducesDeltaReport(t *testing.T) {
 		"| Baseline (-24h0m0s) |",
 		"**Delta:**",
 	} {
-		if !containsString(report, want) {
+		if !strings.Contains(report, want) {
 			t.Errorf("report missing %q\n----\n%s\n----", want, report)
 		}
 	}
 }
 
 func TestProvider_ListAvailableMetrics_FiltersByPrefix(t *testing.T) {
+	t.Parallel()
 	api := &fakeAPI{labelValuesRet: model.LabelValues{
 		"http_requests_total",
 		"http_request_duration_seconds",
@@ -130,6 +135,7 @@ func TestProvider_ListAvailableMetrics_FiltersByPrefix(t *testing.T) {
 }
 
 func TestProvider_ListAvailableMetrics_NoPrefixReturnsAll(t *testing.T) {
+	t.Parallel()
 	api := &fakeAPI{labelValuesRet: model.LabelValues{"z", "a", "m"}}
 	p := NewFromAPI(api)
 	got, err := p.ListAvailableMetrics(context.Background(), "")
@@ -141,15 +147,3 @@ func TestProvider_ListAvailableMetrics_NoPrefixReturnsAll(t *testing.T) {
 	}
 }
 
-func containsString(haystack, needle string) bool {
-	return len(haystack) >= len(needle) && indexOf(haystack, needle) >= 0
-}
-
-func indexOf(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
-}

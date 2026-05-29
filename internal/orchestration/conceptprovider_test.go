@@ -50,6 +50,7 @@ func (f *fakeOrch) GetServiceHistory(_ context.Context, _ provider.Service) (str
 }
 
 func TestConceptProvider_RegistersSixCanonicalTools(t *testing.T) {
+	t.Parallel()
 	cp := NewConceptProvider(&fakeOrch{}, "fake", nil)
 	names := map[string]bool{}
 	for _, td := range cp.Tools() {
@@ -69,6 +70,7 @@ func TestConceptProvider_RegistersSixCanonicalTools(t *testing.T) {
 }
 
 func TestBuildListServicesReport_SortsByNamespaceThenName(t *testing.T) {
+	t.Parallel()
 	services := []provider.Service{
 		{Name: "checkout", Namespace: "prod", Kind: "deployment"},
 		{Name: "api", Namespace: "prod", Kind: "deployment"},
@@ -84,6 +86,7 @@ func TestBuildListServicesReport_SortsByNamespaceThenName(t *testing.T) {
 }
 
 func TestBuildListServicesReport_EmptyShowsNoneMarker(t *testing.T) {
+	t.Parallel()
 	report := buildListServicesReport("kubernetes", "prod", nil)
 	if !strings.Contains(report, "_No services found._") {
 		t.Errorf("missing empty marker:\n%s", report)
@@ -94,6 +97,7 @@ func TestBuildListServicesReport_EmptyShowsNoneMarker(t *testing.T) {
 }
 
 func TestBuildStateReport_RendersReplicasAndStatus(t *testing.T) {
+	t.Parallel()
 	report := buildStateReport("kubernetes",
 		provider.Service{Name: "api", Namespace: "prod", Kind: "deployment"},
 		provider.ServiceState{
@@ -116,6 +120,7 @@ func TestBuildStateReport_RendersReplicasAndStatus(t *testing.T) {
 }
 
 func TestBuildEventsReport_TruncatesLongMessageAndEscapesPipe(t *testing.T) {
+	t.Parallel()
 	long := strings.Repeat("A", 150) + "|piped"
 	events := []provider.Event{
 		{Time: time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC), Type: "Warning", Reason: "OOMKilled", Message: long},
@@ -135,6 +140,7 @@ func TestBuildEventsReport_TruncatesLongMessageAndEscapesPipe(t *testing.T) {
 }
 
 func TestBuildEventsReport_EmptyShowsNoneMarker(t *testing.T) {
+	t.Parallel()
 	report := buildEventsReport("kubernetes",
 		provider.Service{Name: "api", Namespace: "prod"}, time.Hour, nil)
 	if !strings.Contains(report, "_No recent events for this service._") {
@@ -143,6 +149,7 @@ func TestBuildEventsReport_EmptyShowsNoneMarker(t *testing.T) {
 }
 
 func TestSummarizeLabels_CapsAtThreeWithEllipsis(t *testing.T) {
+	t.Parallel()
 	got := summarizeLabels(map[string]string{"a": "1", "b": "2", "c": "3", "d": "4"})
 	if !strings.Contains(got, "…") {
 		t.Errorf("expected ellipsis when more than 3 labels, got %q", got)
@@ -156,6 +163,7 @@ func TestSummarizeLabels_CapsAtThreeWithEllipsis(t *testing.T) {
 }
 
 func TestRestartService_PropagatesBackendError(t *testing.T) {
+	t.Parallel()
 	cp := NewConceptProvider(&fakeOrch{restErr: errors.New("nope")}, "fake", nil)
 	// We can't easily drive the MCP request without the mark3labs harness;
 	// invoke the underlying interface directly to assert error propagation.
