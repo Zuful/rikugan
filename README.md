@@ -388,6 +388,33 @@ The correlation engine (Runes) is the only compound tool — it calls both the K
 
 Core logic — query building, correlation heuristics, report generation — lives in pure functions decoupled from MCP transport. An alternative client (CLI, web, another agent framework) can import the providers directly without an MCP server.
 
+### Concept-first organisation (étape 3+)
+
+Internally Rikugan is now organised by **concept** (operational need) rather than by technology. Each concept defines a per-concept interface in `pkg/provider/concept_interfaces.go`; backends implement that interface and the dispatcher routes through it. The four interfaces today:
+
+| Concept | Interface methods | Backends |
+| --- | --- | --- |
+| Logs | `GetLogs` / `TailLogs` / `SearchLogs` | loki |
+| Metrics | `GetMetric` / `CompareToBaseline` / `ListAvailableMetrics` | prometheus |
+| Alerts | `ListActiveAlerts` / `GetAlertDetails` | alertmanager / sentry / pagerduty (one selected as primary via `ALERTS_PROVIDER`) |
+| Orchestration | `ListServices` / `GetServiceState` / `DescribeService` / `GetRecentEvents` / `RestartService` / `GetServiceHistory` | kubernetes (+ docker-compose as abstraction validation) |
+
+See [`MIGRATION.md`](./MIGRATION.md) for the mapping from the old technology-prefixed tool names (`query_range`, `diagnose_pod`, `alertmanager_list_active_alerts`, …) to the new concept tools (`get_metric`, `describe_service`, `list_active_alerts`, …).
+
+### Per-concept binaries (étape 4)
+
+Rikugan ships five binaries — the unified one plus one per concept — so operators can run only the slice they need.
+
+| Binary | Setup function | Tools |
+| --- | --- | --- |
+| `rikugan` | `app.Setup` | every available provider — union of the four below + versioning, security, tracing, correlation, runes |
+| `rikugan-orchestration` | `app.SetupOrchestration` | `list_services`, `get_service_state`, `describe_service`, `get_recent_events`, `restart_service`, `get_service_history`, `find_pods_by_service_name` |
+| `rikugan-logs` | `app.SetupLogs` | `get_logs`, `tail_logs`, `search_logs`, `detect_log_anomalies` |
+| `rikugan-metrics` | `app.SetupMetrics` | `get_metric`, `compare_to_baseline`, `list_available_metrics` |
+| `rikugan-alerts` | `app.SetupAlerts` | `list_active_alerts`, `get_alert_details`, plus `list_issues_for_release` (sentry) and `get_current_oncalls` (pagerduty) when those backends are configured |
+
+Build them all with `make build-all` (or `./scripts/build-all.sh`). Each binary is a standalone MCP server over STDIO with its own name reported to the client (`rikugan-orchestration`, `rikugan-logs`, etc.). The unified binary remains the back-compat path for users who don't want to run four sidecars.
+
 ## Getting Started
 
 ### Prerequisites
@@ -400,7 +427,11 @@ All other providers are optional. Enable them by setting their environment varia
 ### Build
 
 ```sh
+# Unified binary only
 go build -o rikugan ./cmd/rikugan
+
+# All five binaries (unified + per-concept) into bin/
+make build-all
 ```
 
 ### Run

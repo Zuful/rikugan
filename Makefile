@@ -6,14 +6,19 @@ GOFLAGS     := -v
 VERSION     ?= $(shell git describe --tags --always --dirty)
 LDFLAGS     := -ldflags "-X main.version=$(VERSION)"
 
-.PHONY: all build clean test test-short benchmark lint lint-fix fmt audit run install deps-update help
+.PHONY: all build build-all clean test test-short benchmark lint lint-fix fmt audit run install deps-update help
 
 all: clean fmt lint test build
 
-## build: Build the rikugan MCP server into bin/rikugan
+## build: Build the unified rikugan MCP server into bin/rikugan
 build:
 	@echo "Building $(BINARY_NAME) $(VERSION)..."
 	$(GO) build $(GOFLAGS) $(LDFLAGS) -o bin/$(BINARY_NAME) ./cmd/rikugan
+
+## build-all: Build every cmd/* binary (unified + per-concept) into bin/
+build-all:
+	@echo "Building all binaries ($(VERSION))..."
+	@VERSION=$(VERSION) ./scripts/build-all.sh
 
 ## clean: Remove build and coverage artefacts
 clean:
