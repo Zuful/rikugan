@@ -4,10 +4,6 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/Zuful/rikugan/internal/alerts/alertmanager"
-	"github.com/Zuful/rikugan/internal/alerts/pagerduty"
-	"github.com/Zuful/rikugan/internal/alerts/sentry"
-	"github.com/Zuful/rikugan/internal/logs/loki"
 	"github.com/Zuful/rikugan/internal/security/falco"
 	"github.com/Zuful/rikugan/internal/tracing/jaeger"
 	"github.com/Zuful/rikugan/internal/versioning/argocd"
@@ -68,34 +64,6 @@ func optionalProviders(logger *slog.Logger) []optionalProvider {
 				return nil, err
 			}
 			return falco.NewFromClient(c, falco.WithLogger(logger)), nil
-		}},
-		{"loki", func() (provider.Provider, error) {
-			c, err := loki.BuildClient("")
-			if err != nil {
-				return nil, err
-			}
-			return loki.NewFromClient(c, loki.WithLogger(logger)), nil
-		}},
-		{"sentry", func() (provider.Provider, error) {
-			c, err := sentry.BuildClient("", "", "")
-			if err != nil {
-				return nil, err
-			}
-			return sentry.NewFromClient(c, sentry.WithLogger(logger)), nil
-		}},
-		{"pagerduty", func() (provider.Provider, error) {
-			c, err := pagerduty.BuildClient("")
-			if err != nil {
-				return nil, err
-			}
-			return pagerduty.NewFromClient(c, pagerduty.WithLogger(logger)), nil
-		}},
-		{"alertmanager", func() (provider.Provider, error) {
-			c, err := alertmanager.BuildClient("")
-			if err != nil {
-				return nil, err
-			}
-			return alertmanager.NewFromClient(c, alertmanager.WithLogger(logger)), nil
 		}},
 	}
 }

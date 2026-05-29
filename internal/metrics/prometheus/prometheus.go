@@ -101,9 +101,12 @@ func New(opts ...Option) (*Provider, error) {
 // Name returns the provider identifier.
 func (p *Provider) Name() string { return "prometheus" }
 
-// Tools returns all MCP tools exposed by this provider.
+// Tools returns the prometheus-specific MCP tools that don't project
+// into the concept-level Metrics interface. Today there are none —
+// query_range was replaced by the canonical concept tools get_metric /
+// compare_to_baseline / list_available_metrics, exposed by
+// internal/metrics.ConceptProvider routing through this provider's
+// MetricsProvider methods.
 func (p *Provider) Tools() []provider.ToolDefinition {
-	return []provider.ToolDefinition{
-		p.queryRangeTool(),
-	}
+	return nil
 }

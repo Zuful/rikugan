@@ -76,11 +76,14 @@ func NewFromClient(client *Client, opts ...Option) *Provider {
 // Name returns the provider identifier.
 func (p *Provider) Name() string { return "sentry" }
 
-// Tools returns all MCP tools exposed by this provider.
+// Tools returns the sentry-specific MCP tools that don't project
+// into the concept-level Alerts interface — today, only the
+// release-attribution view, which has no analog in AlertManager or
+// PagerDuty. The canonical list_active_alerts / get_alert_details
+// tools are exposed by internal/alerts.ConceptProvider, which routes
+// through this provider's AlertsProvider methods when ALERTS_PROVIDER=sentry.
 func (p *Provider) Tools() []provider.ToolDefinition {
 	return []provider.ToolDefinition{
-		p.listRecentIssuesTool(),
-		p.getIssueDetailTool(),
 		p.listIssuesForReleaseTool(),
 	}
 }

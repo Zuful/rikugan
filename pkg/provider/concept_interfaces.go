@@ -5,17 +5,17 @@ import (
 	"time"
 )
 
-// The interfaces in this file are the **draft** per-concept contracts
-// for Étape 3 of the refactor. They are intentionally not yet
-// implemented by any provider — Étape 2 only declares them so the
-// concept folders have a target to converge on. Étape 3 will finalise
-// the method shapes (likely by tightening them based on what each
-// provider can actually express) and then refactor each provider to
-// implement them. See REFACTOR_PLAN.md for the full plan.
+// The interfaces in this file are the canonical per-concept contracts.
+// Providers translate their backend's native API into these shared
+// types so each concept's tool registry (under internal/<concept>/)
+// can expose technology-agnostic tool names — get_logs,
+// list_active_alerts, get_service_state — that route to whichever
+// provider the operator configured.
 //
-// Until Étape 3 lands, every provider continues to satisfy the
-// underlying `Provider` (Name + Tools) contract above, and tool
-// registration goes through the dispatcher unchanged.
+// Étape 3 introduces them incrementally, chunk by chunk. Until a
+// provider implements its concept interface it keeps satisfying the
+// base Provider (Name + Tools) contract above; the dispatcher hosts
+// both shapes side by side.
 
 // Service is the orchestration-layer abstraction over a "deployable
 // unit" (a Kubernetes Service + its Pods, a Docker Compose service
@@ -120,18 +120,21 @@ type Alert struct {
 	Extras      map[string]any // provider-specific fields preserved verbatim
 }
 
-// AlertsProvider exposes incident- and error-management operations.
-// AlertManager (firings), Sentry (errors), PagerDuty (incidents) are
-// the reference implementations; provider-specific tools that can't
-// project into this interface (e.g. PagerDuty on-call rotations) stay
-// outside the interface as concept-level optional tools.
+// AlertsProvider exposes the strict intersection of incident- and
+// error-management read operations. AlertManager (firings),
+// Sentry (issues), PagerDuty (incidents) are the reference
+// implementations. Mutating operations (ack/resolve/silence) don't
+// intersect cleanly across the three — AlertManager has no per-alert
+// ack, Sentry has resolve but no ack, PagerDuty has all three with
+// different semantics — so they stay as backend-specific tools rather
+// than being forced into the concept interface. The shared
+// `service string` argument is the operator-chosen scoping label;
+// each backend maps it to its native concept (AM label, Sentry
+// project, PagerDuty service-by-name).
 type AlertsProvider interface {
 	Provider
 	ListActiveAlerts(ctx context.Context, service string) ([]Alert, error)
 	GetAlertDetails(ctx context.Context, alertID string) (Alert, error)
-	AckAlert(ctx context.Context, alertID, by string) error
-	ResolveAlert(ctx context.Context, alertID, by string) error
-	SilenceAlert(ctx context.Context, alertID string, until time.Time, comment string) error
 }
 
 // Tracing, Security, Versioning and Correlation concepts will get their

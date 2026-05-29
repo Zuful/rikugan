@@ -64,9 +64,12 @@ func NewFromClient(client *Client, opts ...Option) *Provider {
 // Name returns the provider identifier.
 func (p *Provider) Name() string { return "alerts/alertmanager" }
 
-// Tools returns the MCP tools this provider exposes.
+// Tools returns the alertmanager-specific MCP tools that don't project
+// into the concept-level Alerts interface — today, none. AlertManager
+// has no per-alert detail endpoint and no operation distinct from
+// what's covered by AlertsProvider, so it relies entirely on the
+// concept-level list_active_alerts / get_alert_details routed through
+// internal/alerts.ConceptProvider when ALERTS_PROVIDER=alertmanager.
 func (p *Provider) Tools() []provider.ToolDefinition {
-	return []provider.ToolDefinition{
-		p.listActiveAlertsTool(),
-	}
+	return nil
 }

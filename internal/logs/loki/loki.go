@@ -61,11 +61,13 @@ func NewFromClient(client *Client, opts ...Option) *Provider {
 // Name returns the provider identifier.
 func (p *Provider) Name() string { return "loki" }
 
-// Tools returns all MCP tools exposed by this provider.
+// Tools returns the loki-specific MCP tools that don't project into
+// the concept-level Logs interface — today, only the anomaly detector.
+// The canonical get_logs / tail_logs / search_logs tools are exposed
+// by internal/logs.ConceptProvider, which routes through
+// loki.Provider's LogsProvider methods.
 func (p *Provider) Tools() []provider.ToolDefinition {
 	return []provider.ToolDefinition{
-		p.searchLogsTool(),
-		p.getLogContextTool(),
 		p.detectLogAnomaliesTool(),
 	}
 }

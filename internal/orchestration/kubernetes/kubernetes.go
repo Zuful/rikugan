@@ -10,11 +10,18 @@ package kubernetes
 
 import (
 	"log/slog"
+	"time"
 
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/Zuful/rikugan/pkg/provider"
 )
+
+// opTimeout bounds any single MCP tool call against the cluster. The
+// concept-level handlers in internal/orchestration apply their own
+// timeout; this one is for tools that still live in this package
+// (find_pods_by_service_name).
+const opTimeout = 30 * time.Second
 
 // Compile-time check that *Provider satisfies provider.Provider.
 var _ provider.Provider = (*Provider)(nil)
@@ -53,12 +60,15 @@ func NewFromClient(client kubernetes.Interface, opts ...Option) *Provider {
 // Name returns the provider identifier.
 func (p *Provider) Name() string { return "orchestration/kubernetes" }
 
-// Tools returns the MCP tools this provider exposes — the
-// orchestration-shaped subset of what the old kubernetes provider
-// shipped.
+// Tools returns the kubernetes-specific MCP tools that don't project
+// into the concept-level Orchestration interface. find_pods_by_service_name
+// stays here because it's a discovery helper specific to how kubernetes
+// labels pods — Docker Compose service names map 1:1 to container
+// names and need no analogous resolver. The compound diagnose_pod tool
+// was removed in étape 3: callers now compose describe_service +
+// get_service_state + get_recent_events (concept tools) explicitly.
 func (p *Provider) Tools() []provider.ToolDefinition {
 	return []provider.ToolDefinition{
-		p.diagnosePodTool(),
 		p.findPodsByServiceTool(),
 	}
 }

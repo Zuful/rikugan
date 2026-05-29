@@ -125,6 +125,17 @@ func (c *Client) FindServiceByName(ctx context.Context, name string) (*Service, 
 	return nil, fmt.Errorf("no service exactly named %q found (PagerDuty returned %d substring matches)", name, len(resp.Services))
 }
 
+// GetIncident returns the full detail of a single incident by ID.
+func (c *Client) GetIncident(ctx context.Context, id string) (*Incident, error) {
+	var resp struct {
+		Incident Incident `json:"incident"`
+	}
+	if err := c.doJSON(ctx, "/incidents/"+url.PathEscape(id), nil, &resp); err != nil {
+		return nil, err
+	}
+	return &resp.Incident, nil
+}
+
 // ListOncalls returns current on-call assignments, optionally filtered by
 // escalation_policy_ids[] or earliest=true (one per policy).
 func (c *Client) ListOncalls(ctx context.Context, params url.Values) ([]Oncall, error) {
