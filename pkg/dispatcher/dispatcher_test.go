@@ -53,16 +53,45 @@ func TestRegister_ValidProvider(t *testing.T) {
 	}
 }
 
-func TestRegister_EmptyProvider(t *testing.T) {
+func TestRegister_ZeroToolProvider_IsAccepted(t *testing.T) {
+	t.Parallel()
 	d := newTestDispatcher()
 	p := &stubProvider{
-		name:  "empty-provider",
+		name:  "concept-only-provider",
 		tools: nil,
 	}
 
-	err := d.Register(p)
-	if err == nil {
-		t.Fatal("expected error for provider with no tools")
+	if err := d.Register(p); err != nil {
+		t.Fatalf("unexpected error registering zero-tool provider: %v", err)
+	}
+	if got := len(d.Providers()); got != 1 {
+		t.Fatalf("expected provider list length 1, got %d", got)
+	}
+	if d.Providers()[0].Name() != "concept-only-provider" {
+		t.Errorf("provider name mismatch: %q", d.Providers()[0].Name())
+	}
+}
+
+func TestRegister_MixedZeroAndNonZeroToolProviders(t *testing.T) {
+	t.Parallel()
+	d := newTestDispatcher()
+
+	empty := &stubProvider{name: "concept-backend", tools: nil}
+	withTools := &stubProvider{
+		name: "concept-tools",
+		tools: []provider.ToolDefinition{
+			{Tool: mcp.NewTool("a_tool", mcp.WithDescription("x")), Handler: noopHandler},
+		},
+	}
+
+	if err := d.Register(empty); err != nil {
+		t.Fatalf("zero-tool register: %v", err)
+	}
+	if err := d.Register(withTools); err != nil {
+		t.Fatalf("with-tools register: %v", err)
+	}
+	if got := len(d.Providers()); got != 2 {
+		t.Fatalf("expected 2 providers, got %d", got)
 	}
 }
 

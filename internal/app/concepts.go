@@ -17,26 +17,86 @@ import (
 	"github.com/Zuful/rikugan/internal/metrics"
 	"github.com/Zuful/rikugan/internal/metrics/prometheus"
 	"github.com/Zuful/rikugan/internal/orchestration"
+	"github.com/Zuful/rikugan/internal/orchestration/dockercompose"
 	orchk8s "github.com/Zuful/rikugan/internal/orchestration/kubernetes"
 	"github.com/Zuful/rikugan/pkg/dispatcher"
 	"github.com/Zuful/rikugan/pkg/provider"
 )
 
-// registerOrchestrationConcept registers the kubernetes-backed
-// orchestration provider (find_pods_by_service_name) and the concept
-// provider (list_services / get_service_state / describe_service /
-// get_recent_events / restart_service / get_service_history).
-// The k8s client is supplied by the caller because it is also used by
-// versioning/kubernetes and by runes — Setup() builds it once.
+// registerOrchestrationConcept registers the orchestration backend
+// selected by the ORCHESTRATION_PROVIDER env var, then wraps it in the
+// concept provider that exposes list_services / get_service_state /
+// describe_service / get_recent_events / restart_service /
+// get_service_history.
+//
+// Supported values:
+//   - kubernetes (default) — uses the k8sClient passed in by the
+//     caller (also shared with versioning/kubernetes and runes in
+//     the unified binary). Also registers the orchk8s.Provider
+//     directly for its find_pods_by_service_name discovery helper.
+//   - dockercompose — builds a dockercompose.Provider, picking up
+//     COMPOSE_PROJECT_NAME if set. The k8sClient is unused in this
+//     mode and may be nil.
+//
+// Unknown values warn-and-fall-back to kubernetes, mirroring how
+// ALERTS_PROVIDER handles unknown backends.
+//
+// Why k8sClient stays in the signature instead of moving the
+// selection up into Setup/SetupOrchestration: the unified Setup()
+// also needs the k8sClient for versioning/kubernetes and runes, so
+// it builds it unconditionally; piping it through this helper keeps
+// one branch point. The per-concept SetupOrchestration() is what
+// reads the env var first and decides whether to build the k8s
+// client at all (nil-safe contract on dockercompose). The guard
+// below catches a misuse where kubernetes is selected without a
+// client.
 func registerOrchestrationConcept(d *dispatcher.Dispatcher, k8sClient kubernetes.Interface, logger *slog.Logger) error {
-	orchKube := orchk8s.NewFromClient(k8sClient, orchk8s.WithLogger(logger))
-	if err := d.Register(orchKube); err != nil {
-		return fmt.Errorf("register orchestration/kubernetes provider: %w", err)
+	backend := os.Getenv("ORCHESTRATION_PROVIDER")
+	if backend == "" {
+		backend = "kubernetes"
 	}
-	if err := d.Register(orchestration.NewConceptProvider(orchKube, "kubernetes", logger)); err != nil {
-		return fmt.Errorf("register orchestration concept provider: %w", err)
+	switch backend {
+	case "kubernetes":
+		if k8sClient == nil {
+			return fmt.Errorf("ORCHESTRATION_PROVIDER=kubernetes requires a kubernetes client (check KUBECONFIG)")
+		}
+		orchKube := orchk8s.NewFromClient(k8sClient, orchk8s.WithLogger(logger))
+		if err := d.Register(orchKube); err != nil {
+			return fmt.Errorf("register orchestration/kubernetes provider: %w", err)
+		}
+		if err := d.Register(orchestration.NewConceptProvider(orchKube, "kubernetes", logger)); err != nil {
+			return fmt.Errorf("register orchestration concept provider: %w", err)
+		}
+		return nil
+	case "dockercompose":
+		opts := []dockercompose.Option{dockercompose.WithLogger(logger)}
+		if project := os.Getenv("COMPOSE_PROJECT_NAME"); project != "" {
+			opts = append(opts, dockercompose.WithProject(project))
+		}
+		dcProvider := dockercompose.New(opts...)
+		if err := d.Register(dcProvider); err != nil {
+			return fmt.Errorf("register orchestration/dockercompose provider: %w", err)
+		}
+		if err := d.Register(orchestration.NewConceptProvider(dcProvider, "dockercompose", logger)); err != nil {
+			return fmt.Errorf("register orchestration concept provider: %w", err)
+		}
+		return nil
+	default:
+		logger.Warn("ORCHESTRATION_PROVIDER unknown, falling back to kubernetes",
+			slog.String("requested", backend),
+		)
+		if k8sClient == nil {
+			return fmt.Errorf("ORCHESTRATION_PROVIDER=%q is unknown and the kubernetes fallback has no client", backend)
+		}
+		orchKube := orchk8s.NewFromClient(k8sClient, orchk8s.WithLogger(logger))
+		if err := d.Register(orchKube); err != nil {
+			return fmt.Errorf("register orchestration/kubernetes provider: %w", err)
+		}
+		if err := d.Register(orchestration.NewConceptProvider(orchKube, "kubernetes", logger)); err != nil {
+			return fmt.Errorf("register orchestration concept provider: %w", err)
+		}
+		return nil
 	}
-	return nil
 }
 
 // registerMetricsConcept builds the prometheus API and registers the

@@ -21,8 +21,10 @@ package app
 import (
 	"fmt"
 	"log/slog"
+	"os"
 
 	"github.com/mark3labs/mcp-go/server"
+	"k8s.io/client-go/kubernetes"
 
 	"github.com/Zuful/rikugan/internal/correlation/runes"
 	versk8s "github.com/Zuful/rikugan/internal/versioning/kubernetes"
@@ -92,15 +94,25 @@ func Setup(logger *slog.Logger, version string) (*server.MCPServer, error) {
 }
 
 // SetupOrchestration constructs an MCP server that registers only the
-// orchestration concept (concept tools + find_pods_by_service_name
-// helper). Used by cmd/orchestration-mcp.
+// orchestration concept. The backend is selected by
+// ORCHESTRATION_PROVIDER: when set to "dockercompose" the kubernetes
+// client is not built (so the operator does not need a kubeconfig to
+// run a docker-compose-only orchestration MCP). Any other value
+// (including the default "kubernetes") triggers the usual k8s client
+// build; failure to build is fatal in that mode.
+//
+// Used by cmd/orchestration-mcp.
 func SetupOrchestration(logger *slog.Logger, version string) (*server.MCPServer, error) {
 	mcpSrv := pkgmcp.NewServer("rikugan-orchestration", version)
 	d := dispatcher.New(mcpSrv, logger)
 
-	k8sClient, err := pkgk8s.BuildClient("")
-	if err != nil {
-		return nil, fmt.Errorf("build k8s client: %w", err)
+	var k8sClient kubernetes.Interface
+	if os.Getenv("ORCHESTRATION_PROVIDER") != "dockercompose" {
+		c, err := pkgk8s.BuildClient("")
+		if err != nil {
+			return nil, fmt.Errorf("build k8s client: %w", err)
+		}
+		k8sClient = c
 	}
 	if err := registerOrchestrationConcept(d, k8sClient, logger); err != nil {
 		return nil, err
