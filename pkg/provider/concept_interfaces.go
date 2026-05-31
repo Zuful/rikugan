@@ -12,10 +12,15 @@ import (
 // list_active_alerts, get_service_state — that route to whichever
 // provider the operator configured.
 //
-// Étape 3 introduces them incrementally, chunk by chunk. Until a
-// provider implements its concept interface it keeps satisfying the
-// base Provider (Name + Tools) contract above; the dispatcher hosts
-// both shapes side by side.
+// Four concepts have a stable interface today: LogsProvider,
+// MetricsProvider, AlertsProvider, OrchestrationProvider. Backends
+// that implement them also satisfy the base Provider (Name + Tools)
+// contract above so they can register backend-specific tools that
+// don't project into the strict-intersection interface (e.g. loki's
+// detect_log_anomalies, pagerduty's get_current_oncalls). The
+// versioning, tracing, and security concepts keep the base Provider
+// contract only — their interface will land once a second backend
+// makes the abstraction honest.
 
 // Service is the orchestration-layer abstraction over a "deployable
 // unit" (a Kubernetes Service + its Pods, a Docker Compose service

@@ -1,13 +1,15 @@
 // Package metrics groups every provider that answers metric-retrieval
-// questions: fetch a series, compare to a baseline, list available
-// metric names.
+// questions: fetch a series over a time window, compare current values
+// to a historical baseline, list available metric names for discovery.
 //
-// Sub-package: prometheus (today). kubectl-top is TODO for a follow-up
-// PR after the refactor lands. All sub-packages will implement
-// provider.MetricsProvider so concept-level tools (get_metric,
-// compare_to_baseline, list_available_metrics) route via operator
-// config.
+// This package hosts the ConceptProvider that registers the canonical
+// MCP tools — get_metric, compare_to_baseline, list_available_metrics
+// — and routes each call through provider.MetricsProvider to whichever
+// backend the operator configured.
 //
-// Étape 2 status: see REFACTOR_PLAN.md — code moved, interface
-// declared, providers not yet implementing it.
+// Sub-package today: prometheus (implements MetricsProvider; no
+// remaining backend-specific tools — every operation projects into
+// the concept interface). A kubectl-top backend is tracked for a
+// follow-up PR and will plug into the same ConceptProvider without
+// changing the tool surface.
 package metrics

@@ -1,7 +1,9 @@
-// Package logging hosts the slog initialiser and log-level parser that
-// every rikugan binary uses. Centralising them here means the
-// per-concept binaries we'll introduce in Étape 4 don't each
-// re-implement the same JSON-on-stderr boilerplate.
+// Package logging hosts the slog initialiser and log-level parser
+// that every rikugan binary uses. Centralising them here means the
+// unified rikugan binary and the per-concept binaries
+// (rikugan-orchestration / rikugan-logs / rikugan-metrics /
+// rikugan-alerts) don't each re-implement the same JSON-on-stderr
+// boilerplate.
 package logging
 
 import (

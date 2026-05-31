@@ -3,13 +3,20 @@
 // they in, what events have they emitted, restart them, replay their
 // history.
 //
-// Sub-packages: kubernetes (live cluster), and — once Étape 3 lands —
-// dockercompose. Both implement provider.OrchestrationProvider so the
-// concept-level MCP tools (list_services, get_service_state, …) can
-// route to whichever backend the operator configured.
+// This package hosts the ConceptProvider that registers the canonical
+// MCP tools — list_services, get_service_state, describe_service,
+// get_recent_events, restart_service, get_service_history — and
+// routes each call through provider.OrchestrationProvider to whichever
+// backend the operator configured. ORCHESTRATION_PROVIDER selects the
+// backend (default kubernetes, also dockercompose).
 //
-// Étape 2 status: sub-package code has been moved here under its
-// original Provider (Name + Tools) shape. The concept-level interface
-// in pkg/provider is declared but not yet implemented; concept-level
-// tools are not yet exposed. See REFACTOR_PLAN.md.
+// Sub-packages:
+//   - kubernetes: live cluster backend, also exposes the
+//     find_pods_by_service_name discovery helper outside the
+//     concept interface.
+//   - dockercompose: implements the same OrchestrationProvider
+//     contract via the docker CLI. Validates that the interface
+//     generalises beyond Kubernetes (étape-3 abstraction gate);
+//     GetServiceHistory degrades gracefully there since Compose has
+//     no native rolling-update history.
 package orchestration

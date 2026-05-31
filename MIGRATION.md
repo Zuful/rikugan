@@ -135,13 +135,38 @@ backend prefix (when present) is preserved so calls remain unambiguous.
 
 ---
 
-## What étape 4 will add (preview, not delivered yet)
+## Étape 4 — delivered
 
-- `ORCHESTRATION_PROVIDER` env var (kubernetes / docker-compose) to
-  pick the orchestration backend at runtime
-- `LOGS_PROVIDER` for kubectl-logs / docker-logs alongside loki
-- Per-concept binaries: `cmd/orchestration-mcp/`, `cmd/logs-mcp/`,
-  `cmd/metrics-mcp/`, `cmd/alerts-mcp/` sharing the `pkg/` and
-  `internal/<concept>/` packages.
+Étape 4 of the refactor is in the codebase. What it added:
 
-See [REFACTOR_PLAN.md](./REFACTOR_PLAN.md) for the master plan.
+- **Per-concept binaries:** `cmd/orchestration-mcp/`,
+  `cmd/logs-mcp/`, `cmd/metrics-mcp/`, `cmd/alerts-mcp/` — each
+  registers only its concept's providers. Build them all with
+  `make build-all` (alongside the unified `rikugan`).
+- **`ORCHESTRATION_PROVIDER` env var** — selects the orchestration
+  backend at runtime. Supported values: `kubernetes` (default,
+  requires a kubeconfig) and `dockercompose` (uses the docker CLI;
+  reads `COMPOSE_PROJECT_NAME` for the default project). Honored by
+  the per-concept `rikugan-orchestration` binary; the unified
+  `rikugan` always wires the kubernetes backend so versioning and
+  runes also work.
+- **`ALERTS_PROVIDER` env var** — selects which alerts backend
+  serves `list_active_alerts` / `get_alert_details`. Defaults to the
+  first available backend in priority order
+  `alertmanager > sentry > pagerduty`. Non-primary backends still
+  register their backend-specific extras.
+
+What is still tracked for follow-up PRs (not in scope for the
+concept-first refactor itself):
+
+- `LOGS_PROVIDER` for kubectl-logs / docker-logs alongside loki —
+  the LogsProvider interface is ready; the backends just don't
+  exist yet.
+- `METRICS_PROVIDER` for kubectl-top alongside prometheus — same
+  story.
+- Refactoring `runes` to call `OrchestrationProvider` and
+  `MetricsProvider` instead of the k8s client and `promv1.API`
+  directly (REFACTOR_PLAN §5).
+
+See [REFACTOR_PLAN.md](./REFACTOR_PLAN.md) for the original plan
+(archived as-is).

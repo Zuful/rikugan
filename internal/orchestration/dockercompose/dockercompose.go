@@ -1,19 +1,21 @@
 // Package dockercompose is the Docker Compose-backed slice of the
-// orchestration concept. Its sole purpose in étape 3 of the refactor
-// is to validate provider.OrchestrationProvider by implementing the
-// six interface methods against a second, very different runtime
-// (no API server, no rolling-update history, one CLI to rule them all).
+// orchestration concept. It implements all six methods of
+// provider.OrchestrationProvider against a runtime that has no API
+// server and no native rolling-update history concept — proof that
+// the orchestration abstraction generalises beyond Kubernetes.
 //
-// The brief calls this chunk the "CRITICAL gate": if the interface
-// tears here, we narrow it. See REFACTOR_PLAN.md and the comments in
-// orchestrationprovider.go for the per-method assessment of how
-// cleanly the abstraction holds.
+// Operators select this backend by setting ORCHESTRATION_PROVIDER=dockercompose
+// before starting the unified rikugan binary or the per-concept
+// rikugan-orchestration binary. COMPOSE_PROJECT_NAME picks the
+// default Compose project when the per-call namespace argument is
+// empty.
 //
-// This provider is not wired into the default rikugan startup — it
-// exists so the codebase carries proof that the orchestration
-// abstraction works for at least one non-Kubernetes runtime. A
-// future ORCHESTRATION_PROVIDER env var (étape 4) will let operators
-// pick it.
+// One soft tear in the abstraction: GetServiceHistory has no native
+// equivalent in Compose. Rather than break the interface, the method
+// returns a documented degradation report listing currently-deployed
+// images and pointing the operator at the container registry tag
+// history, the compose-file git log, and CI build logs. See
+// orchestrationprovider.go for the per-method assessment.
 package dockercompose
 
 import (

@@ -4,8 +4,10 @@
 // (GitHub, GitLab), runtime → commit bridging (kubernetes image
 // provenance).
 //
-// Sub-packages: argocd, github, gitlab, kubernetes. Versioning is P1
-// in the refactor plan — code is moved into this concept folder
-// during Étape 2, but the Provider interface stays informal until
-// the P1 work begins. See REFACTOR_PLAN.md.
+// Sub-packages: argocd, github, gitlab, kubernetes. Versioning does
+// not yet have a formal Provider interface in pkg/provider — the
+// concept stays as a folder grouping for now, with tools registered
+// under their backend-specific names. A unified ChangeProvider /
+// VersioningProvider interface will land when the abstraction
+// is worth designing (likely once a fourth implementation appears).
 package versioning

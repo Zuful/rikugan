@@ -2,10 +2,13 @@
 // concept. AlertManager is the Prometheus stack's alert routing daemon;
 // this provider lets agents list and inspect currently-firing alerts.
 //
-// Étape 2 scaffold — exposes a single tool (alertmanager_list_active_alerts)
-// that wraps GET /api/v2/alerts. The full AlertsProvider implementation
-// (with Ack/Resolve/Silence) lands in Étape 3 when the concept
-// interface is finalised.
+// Implements provider.AlertsProvider (ListActiveAlerts /
+// GetAlertDetails), routed through internal/alerts.ConceptProvider
+// when ALERTS_PROVIDER=alertmanager (or when alertmanager is the
+// first available backend in the priority order). Has no
+// backend-specific tools outside the concept interface — every
+// AlertManager operation projects cleanly into it. See MIGRATION.md
+// for the tool rename from the pre-refactor alertmanager_list_active_alerts.
 package alertmanager
 
 import (

@@ -1,5 +1,14 @@
 # Rikugan MCP — Refactor Plan: concept-first architecture
 
+> **Archive notice.** This plan has been fully executed across four
+> commits on the `refactor/concept-first` branch. The current state of
+> the codebase is documented in [MIGRATION.md](./MIGRATION.md) (tool
+> rename table, env vars, what landed in each étape) and
+> [README.md](./README.md) (architecture, per-concept binaries, tools
+> by concept). This document is preserved as-is to record the original
+> reasoning and stage breakdown — do not edit it to reflect the
+> present; edit MIGRATION.md and README.md instead.
+
 **Status :** Étape 1 — plan, awaiting validation. No code touched yet.
 **Branch :** `refactor/concept-first`.
 

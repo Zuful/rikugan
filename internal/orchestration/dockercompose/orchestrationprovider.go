@@ -257,11 +257,13 @@ func (p *Provider) RestartService(ctx context.Context, svc provider.Service) err
 // Rather than return an error and break the interface, this method
 // returns a Markdown report that explains the limitation and suggests
 // alternatives the operator can pursue manually (image registry tags,
-// git log, CI build logs). The concept tool still works against this
-// backend — it just degrades to a documented dead-end. Étape 4 may
-// choose to drop GetServiceHistory from the strict-intersection
-// interface and promote it to a backend-specific tool instead;
-// chunk E flags the decision for the user.
+// git log of the compose file, CI build logs). The concept tool
+// still works against this backend — it just degrades to a documented
+// dead-end. The decision to keep the method in the interface (rather
+// than narrow the interface and promote it to a kubernetes-specific
+// tool) is recorded in MIGRATION.md and REFACTOR_PLAN.md: a future
+// backend (nomad, ECS, swarm) can either implement it or follow the
+// same fallback pattern.
 func (p *Provider) GetServiceHistory(ctx context.Context, svc provider.Service) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "## Service History — `%s` (Docker Compose)\n\n", svc.Name)
