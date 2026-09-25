@@ -89,12 +89,12 @@ func toProviderAlert(i Incident) provider.Alert {
 		Service:     i.Service.Summary,
 		Source:      "pagerduty",
 		Extras: map[string]any{
-			"incidentNumber":  i.IncidentNumber,
-			"urgency":         i.Urgency,
-			"htmlURL":         i.HTMLURL,
+			"incidentNumber":   i.IncidentNumber,
+			"urgency":          i.Urgency,
+			"htmlURL":          i.HTMLURL,
 			"lastStatusChange": i.LastStatusChange,
-			"assignee":        assignee,
-			"serviceID":       i.Service.ID,
+			"assignee":         assignee,
+			"serviceID":        i.Service.ID,
 		},
 	}
 }

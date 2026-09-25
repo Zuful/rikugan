@@ -34,9 +34,9 @@ var _ provider.Provider = (*ConceptProvider)(nil)
 // The underlying provider stays registered separately when it has
 // extra non-canonical tools (e.g. loki's detect_log_anomalies).
 type ConceptProvider struct {
-	impl       provider.LogsProvider
-	implName   string // human label of the backend, surfaced in reports
-	logger     *slog.Logger
+	impl     provider.LogsProvider
+	implName string // human label of the backend, surfaced in reports
+	logger   *slog.Logger
 }
 
 // NewConceptProvider wires the concept tools to a specific LogsProvider

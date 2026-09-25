@@ -146,4 +146,3 @@ func TestProvider_ListAvailableMetrics_NoPrefixReturnsAll(t *testing.T) {
 		t.Errorf("got %v, want sorted [a m z]", got)
 	}
 }
-

@@ -19,8 +19,8 @@ type fakeLogs struct {
 	err     error
 }
 
-func (f *fakeLogs) Name() string                            { return "fake" }
-func (f *fakeLogs) Tools() []provider.ToolDefinition        { return nil }
+func (f *fakeLogs) Name() string                     { return "fake" }
+func (f *fakeLogs) Tools() []provider.ToolDefinition { return nil }
 
 func (f *fakeLogs) GetLogs(_ context.Context, q provider.LogQuery) ([]provider.LogEntry, error) {
 	f.called = "get"
