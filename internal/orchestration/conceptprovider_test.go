@@ -78,10 +78,10 @@ func TestBuildListServicesReport_SortsByNamespaceThenName(t *testing.T) {
 	}
 	report := buildListServicesReport("kubernetes", "", services)
 	iAlpha := strings.Index(report, "alpha")
-	iApi := strings.Index(report, "| `api`")
+	iAPI := strings.Index(report, "| `api`")
 	iCheckout := strings.Index(report, "| `checkout`")
-	if !(iAlpha < iApi && iApi < iCheckout) {
-		t.Errorf("ordering wrong: alpha=%d api=%d checkout=%d\n%s", iAlpha, iApi, iCheckout, report)
+	if iAlpha >= iAPI || iAPI >= iCheckout {
+		t.Errorf("ordering wrong: alpha=%d api=%d checkout=%d\n%s", iAlpha, iAPI, iCheckout, report)
 	}
 }
 

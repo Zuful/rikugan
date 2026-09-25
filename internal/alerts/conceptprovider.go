@@ -154,10 +154,10 @@ func buildListAlertsReport(backend, service string, alerts []provider.Alert) str
 	b.WriteString("|----------|-------|---------|---------|-----|-------|\n")
 	for _, a := range alerts {
 		fmt.Fprintf(&b, "| %s | %s | %s | %s | `%s` | %s |\n",
-			fallback(a.Severity, "—"),
-			fallback(a.State, "—"),
+			orDash(a.Severity),
+			orDash(a.State),
 			a.StartedAt.UTC().Format(time.RFC3339),
-			fallback(a.Service, "—"),
+			orDash(a.Service),
 			a.ID,
 			escapePipe(a.Title),
 		)
@@ -173,9 +173,9 @@ func buildAlertDetailReport(backend string, a provider.Alert) string {
 	fmt.Fprintf(&b, "**Title:** %s\n\n", a.Title)
 
 	fmt.Fprintf(&b, "| Field | Value |\n|-------|-------|\n")
-	fmt.Fprintf(&b, "| Severity | %s |\n", fallback(a.Severity, "—"))
-	fmt.Fprintf(&b, "| State | %s |\n", fallback(a.State, "—"))
-	fmt.Fprintf(&b, "| Service | %s |\n", fallback(a.Service, "—"))
+	fmt.Fprintf(&b, "| Severity | %s |\n", orDash(a.Severity))
+	fmt.Fprintf(&b, "| State | %s |\n", orDash(a.State))
+	fmt.Fprintf(&b, "| Service | %s |\n", orDash(a.Service))
 	fmt.Fprintf(&b, "| Source | %s |\n", a.Source)
 	fmt.Fprintf(&b, "| Started | %s |\n", a.StartedAt.UTC().Format(time.RFC3339))
 	if a.Description != "" {
@@ -210,9 +210,14 @@ func severityRank(s string) int {
 	}
 }
 
-func fallback(s, alt string) string {
+// emDash is what an empty field renders as in a report table.
+const emDash = "—"
+
+// orDash renders s, or an em dash when s is empty, so report tables never
+// carry a blank cell.
+func orDash(s string) string {
 	if s == "" {
-		return alt
+		return emDash
 	}
 	return s
 }

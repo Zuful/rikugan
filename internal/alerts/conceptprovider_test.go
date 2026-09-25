@@ -66,7 +66,7 @@ func TestBuildListAlertsReport_SortsBySeverityThenStartedAt(t *testing.T) {
 	if freshIdx == -1 || oldIdx == -1 || infoIdx == -1 {
 		t.Fatalf("missing titles in report:\n%s", report)
 	}
-	if !(freshIdx < oldIdx && oldIdx < infoIdx) {
+	if freshIdx >= oldIdx || oldIdx >= infoIdx {
 		t.Errorf("ordering wrong: fresh=%d old=%d info=%d\n%s", freshIdx, oldIdx, infoIdx, report)
 	}
 	if !strings.Contains(report, "**Backend:** `alertmanager`") {
