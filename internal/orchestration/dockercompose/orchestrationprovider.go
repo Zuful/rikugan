@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -242,6 +243,12 @@ func (p *Provider) GetRecentEvents(ctx context.Context, svc provider.Service, si
 // containers are stopped and re-created.
 func (p *Provider) RestartService(ctx context.Context, svc provider.Service) error {
 	project := p.resolveProject(svc.Namespace)
+	if err := validateComposeName("project", project); err != nil {
+		return err
+	}
+	if err := validateComposeName("service", svc.Name); err != nil {
+		return err
+	}
 	args := []string{"compose", "-p", project, "restart", svc.Name}
 	if _, err := p.runner.Run(ctx, "docker", args...); err != nil {
 		return fmt.Errorf("docker compose restart: %w", err)
@@ -290,6 +297,26 @@ func (p *Provider) GetServiceHistory(ctx context.Context, svc provider.Service) 
 
 // ── Internal helpers ────────────────────────────────────────────────────────
 
+// composeNamePattern is the shape Docker Compose itself accepts for project
+// and service names. The rule that matters for safety is the first
+// character: a name like "-v" would reach docker as a flag rather than as a
+// value, which is the argument-injection shape gosec (G204) and Bearer
+// (CWE-78) flag on execRunner.Run.
+var composeNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
+
+// validateComposeName rejects a project or service name that docker could
+// parse as a flag. An empty name means "not supplied" and is left to the
+// caller's own defaulting, so it passes.
+func validateComposeName(kind, name string) error {
+	if name == "" {
+		return nil
+	}
+	if !composeNamePattern.MatchString(name) {
+		return fmt.Errorf("invalid %s name %q: expected letters, digits, dot, dash or underscore, and not starting with a dash", kind, name)
+	}
+	return nil
+}
+
 func (p *Provider) resolveProject(namespace string) string {
 	if namespace != "" {
 		return namespace
@@ -302,6 +329,9 @@ func (p *Provider) resolveProject(namespace string) string {
 func (p *Provider) dockerComposePS(ctx context.Context, project string) ([]composePS, error) {
 	args := []string{"compose"}
 	if proj := p.resolveProject(project); proj != "" {
+		if err := validateComposeName("project", proj); err != nil {
+			return nil, err
+		}
 		args = append(args, "-p", proj)
 	}
 	args = append(args, "ps", "-a", "--format", "json")

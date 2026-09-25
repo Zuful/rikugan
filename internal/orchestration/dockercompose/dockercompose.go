@@ -48,6 +48,13 @@ type CommandRunner interface {
 type execRunner struct{}
 
 func (execRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	// #nosec G204 -- name is the literal "docker" at every call site and
+	// CommandContext never goes through a shell, so the argv entries cannot
+	// be reinterpreted as commands. The one residual risk is argument
+	// injection: a project or service name beginning with a dash would be
+	// read by docker as a flag. Those two values are the only externally
+	// supplied ones and validateComposeName rejects that shape before they
+	// reach this call.
 	cmd := exec.CommandContext(ctx, name, args...)
 	var out, errBuf bytes.Buffer
 	cmd.Stdout = &out

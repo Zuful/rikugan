@@ -190,3 +190,48 @@ func TestParseComposePS_HandlesArrayForm(t *testing.T) {
 		t.Errorf("array form not parsed correctly: %+v", got)
 	}
 }
+
+func TestValidateComposeName(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{"plain name", "checkout", false},
+		{"digits and dashes", "api-v2", false},
+		{"dots and underscores", "my_project.v1", false},
+		{"empty means not supplied", "", false},
+		{"leading dash would be read as a flag", "-v", true},
+		{"long flag shape", "--volume=/:/host", true},
+		{"embedded space", "api service", true},
+		{"shell metacharacter", "api;rm -rf /", true},
+		{"command substitution", "$(whoami)", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateComposeName("service", tt.input)
+			if tt.wantErr && err == nil {
+				t.Errorf("validateComposeName(%q) = nil, want an error", tt.input)
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("validateComposeName(%q) = %v, want nil", tt.input, err)
+			}
+		})
+	}
+}
+
+func TestRestartService_RejectsFlagLikeServiceName(t *testing.T) {
+	t.Parallel()
+	runner := &stubRunner{}
+	p := New(WithRunner(runner), WithProject("demo"))
+
+	err := p.RestartService(context.Background(), provider.Service{Name: "-v", Namespace: "demo"})
+	if err == nil {
+		t.Fatal("expected a validation error for a flag-like service name")
+	}
+	if len(runner.calls) != 0 {
+		t.Errorf("runner was invoked %d time(s); validation must happen before exec", len(runner.calls))
+	}
+}
