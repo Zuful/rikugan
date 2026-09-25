@@ -1,5 +1,17 @@
 # Rikugan — Finishing pass post-refactor concept-first
 
+> **Archive notice.** This plan has been fully executed. Étapes B, C
+> and D landed as `7dd5ae2`, `41fc80f` and `a6ce3e7` on the
+> `refactor/concept-first` branch, merged into `main` as part of
+> PR #20. The current state of the codebase is documented in
+> [MIGRATION.md](./MIGRATION.md) and [README.md](./README.md). This
+> document is preserved as-is to record the audit and the reasoning —
+> do not edit it to reflect the present; edit MIGRATION.md and
+> README.md instead.
+>
+> One item from *Out of scope* has since been closed: `pkg/restclient`
+> was extracted in `e9e66f0`. The other two remain open.
+
 Three targeted gaps from the original brief that the refactor PR did not
 close. This document is the étape-A plan; nothing in the codebase is
 touched until the user validates.
@@ -111,13 +123,15 @@ Pure doc edits, no code touched:
   directly instead of routing through `OrchestrationProvider` /
   `MetricsProvider` as REFACTOR_PLAN §5 envisioned. Refactor that
   later — the brief explicitly says no new scope.
-- `pkg/restclient/` helper was planned in étape 2 but never extracted;
-  each HTTP-based provider still has its own `doJSON` copy. Not in
-  scope here.
+- ~~`pkg/restclient/` helper was planned in étape 2 but never
+  extracted; each HTTP-based provider still has its own `doJSON`
+  copy.~~ **Done** in `e9e66f0` — `restclient.Client` now owns the
+  request/status/decode sequence for all seven providers.
 - `cmd/rikugan-mcp/` target tree name (REFACTOR_PLAN §3) was never
   applied — the unified binary stayed `cmd/rikugan/`. Either is fine;
   no rename in this pass.
 
 ---
 
-**Stopping here.** Awaiting validation before touching code.
+**Executed.** Étapes B, C and D are in `main`; see the archive notice
+at the top of this file.
