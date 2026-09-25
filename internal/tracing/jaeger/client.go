@@ -2,30 +2,24 @@ package jaeger
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"net/url"
 	"strings"
-	"time"
-)
 
-const clientTimeout = 30 * time.Second
+	"github.com/Zuful/rikugan/pkg/restclient"
+)
 
 // Client is a thin wrapper around the Jaeger Query REST API.
 type Client struct {
-	baseURL    string
-	httpClient *http.Client
+	baseURL string
+	rest    *restclient.Client
 }
 
 // NewClient creates a Jaeger REST client.
 func NewClient(baseURL string) *Client {
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
-		httpClient: &http.Client{
-			Timeout: clientTimeout,
-		},
+		rest:    restclient.New("jaeger"),
 	}
 }
 
@@ -90,7 +84,7 @@ func (c *Client) FindTraces(ctx context.Context, service string, limit int, minD
 	u := fmt.Sprintf("%s/api/traces?%s", c.baseURL, params.Encode())
 
 	var resp traceResponse
-	if err := c.doJSON(ctx, u, &resp); err != nil {
+	if err := c.rest.GetJSON(ctx, u, &resp); err != nil {
 		return nil, err
 	}
 	return resp.Data, nil
@@ -101,34 +95,11 @@ func (c *Client) GetTrace(ctx context.Context, traceID string) (*Trace, error) {
 	u := fmt.Sprintf("%s/api/traces/%s", c.baseURL, traceID)
 
 	var resp traceResponse
-	if err := c.doJSON(ctx, u, &resp); err != nil {
+	if err := c.rest.GetJSON(ctx, u, &resp); err != nil {
 		return nil, err
 	}
 	if len(resp.Data) == 0 {
 		return nil, fmt.Errorf("trace %s not found", traceID)
 	}
 	return &resp.Data[0], nil
-}
-
-func (c *Client) doJSON(ctx context.Context, url string, dst any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return fmt.Errorf("create request: %w", err)
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("jaeger request failed: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return fmt.Errorf("jaeger returned %d: %s", resp.StatusCode, string(body))
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(dst); err != nil {
-		return fmt.Errorf("decode jaeger response: %w", err)
-	}
-	return nil
 }

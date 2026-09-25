@@ -2,37 +2,40 @@ package sentry
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
-)
 
-const clientTimeout = 30 * time.Second
+	"github.com/Zuful/rikugan/pkg/restclient"
+)
 
 // Client is a thin wrapper around the Sentry REST API (api/0/). Each Client
 // is scoped to one organisation — Sentry's project and release endpoints
 // are org-relative, so binding it once at construction keeps call sites
 // compact.
 type Client struct {
-	baseURL    string
-	token      string
-	org        string
-	httpClient *http.Client
+	baseURL string
+	org     string
+	rest    *restclient.Client
 }
 
 // NewClient creates a Sentry REST client bound to a specific organisation.
 func NewClient(baseURL, token, org string) *Client {
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
-		token:   token,
 		org:     org,
-		httpClient: &http.Client{
-			Timeout: clientTimeout,
-		},
+		rest: restclient.New("sentry",
+			restclient.WithHeader("Authorization", "Bearer "+token),
+			restclient.WithHeader("Accept", "application/json"),
+			restclient.WithStatusHint(http.StatusUnauthorized,
+				"sentry auth failed (HTTP 401) — check SENTRY_AUTH_TOKEN"),
+			restclient.WithStatusHint(http.StatusForbidden,
+				"sentry auth failed (HTTP 403) — check SENTRY_AUTH_TOKEN"),
+			restclient.WithStatusHint(http.StatusNotFound,
+				"sentry resource not found (HTTP 404) — check the project, issue ID or release version"),
+		),
 	}
 }
 
@@ -133,36 +136,5 @@ func (c *Client) ListReleaseIssues(ctx context.Context, version string, limit in
 }
 
 func (c *Client) doJSON(ctx context.Context, path string, params url.Values, dst any) error {
-	u := c.baseURL + path
-	if len(params) > 0 {
-		u += "?" + params.Encode()
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		return fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("sentry request failed: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	switch {
-	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-		return fmt.Errorf("sentry auth failed (HTTP %d) — check SENTRY_AUTH_TOKEN", resp.StatusCode)
-	case resp.StatusCode == http.StatusNotFound:
-		return fmt.Errorf("sentry resource not found (HTTP 404) — check the project, issue ID or release version")
-	case resp.StatusCode != http.StatusOK:
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return fmt.Errorf("sentry returned %d: %s", resp.StatusCode, string(body))
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(dst); err != nil {
-		return fmt.Errorf("decode sentry response: %w", err)
-	}
-	return nil
+	return c.rest.GetJSON(ctx, restclient.JoinURL(c.baseURL, path, params), dst)
 }

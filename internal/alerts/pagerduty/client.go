@@ -2,16 +2,14 @@ package pagerduty
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
-)
 
-const clientTimeout = 30 * time.Second
+	"github.com/Zuful/rikugan/pkg/restclient"
+)
 
 // baseURL is the PagerDuty API root. It's a var rather than a const so
 // tests can swap it for an httptest.Server URL; production code never
@@ -20,18 +18,25 @@ var baseURL = "https://api.pagerduty.com"
 
 // Client is a thin wrapper around the PagerDuty REST API.
 type Client struct {
-	token      string
-	httpClient *http.Client
+	baseURL string
+	rest    *restclient.Client
 }
 
 // NewClient creates a PagerDuty REST client. PagerDuty uses a custom
 // auth scheme ("Token token=KEY"), not Bearer.
 func NewClient(token string) *Client {
 	return &Client{
-		token: token,
-		httpClient: &http.Client{
-			Timeout: clientTimeout,
-		},
+		baseURL: baseURL,
+		rest: restclient.New("pagerduty",
+			restclient.WithHeader("Authorization", "Token token="+token),
+			restclient.WithHeader("Accept", "application/vnd.pagerduty+json;version=2"),
+			restclient.WithStatusHint(http.StatusUnauthorized,
+				"pagerduty auth failed (HTTP 401) — check PAGERDUTY_API_TOKEN"),
+			restclient.WithStatusHint(http.StatusForbidden,
+				"pagerduty auth failed (HTTP 403) — check PAGERDUTY_API_TOKEN"),
+			restclient.WithStatusHint(http.StatusNotFound,
+				"pagerduty resource not found (HTTP 404) — check the service or policy ID"),
+		),
 	}
 }
 
@@ -149,36 +154,5 @@ func (c *Client) ListOncalls(ctx context.Context, params url.Values) ([]Oncall, 
 }
 
 func (c *Client) doJSON(ctx context.Context, path string, params url.Values, dst any) error {
-	u := baseURL + path
-	if len(params) > 0 {
-		u += "?" + params.Encode()
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		return fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Authorization", "Token token="+c.token)
-	req.Header.Set("Accept", "application/vnd.pagerduty+json;version=2")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("pagerduty request failed: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	switch {
-	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-		return fmt.Errorf("pagerduty auth failed (HTTP %d) — check PAGERDUTY_API_TOKEN", resp.StatusCode)
-	case resp.StatusCode == http.StatusNotFound:
-		return fmt.Errorf("pagerduty resource not found (HTTP 404) — check the service or policy ID")
-	case resp.StatusCode != http.StatusOK:
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return fmt.Errorf("pagerduty returned %d: %s", resp.StatusCode, string(body))
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(dst); err != nil {
-		return fmt.Errorf("decode pagerduty response: %w", err)
-	}
-	return nil
+	return c.rest.GetJSON(ctx, restclient.JoinURL(c.baseURL, path, params), dst)
 }

@@ -2,30 +2,25 @@ package falco
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"net/url"
 	"strings"
 	"time"
-)
 
-const clientTimeout = 30 * time.Second
+	"github.com/Zuful/rikugan/pkg/restclient"
+)
 
 // Client is a thin wrapper around the Falcosidekick REST API.
 type Client struct {
-	baseURL    string
-	httpClient *http.Client
+	baseURL string
+	rest    *restclient.Client
 }
 
 // NewClient creates a Falcosidekick REST client.
 func NewClient(baseURL string) *Client {
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
-		httpClient: &http.Client{
-			Timeout: clientTimeout,
-		},
+		rest:    restclient.New("falcosidekick"),
 	}
 }
 
@@ -61,33 +56,10 @@ func (c *Client) ListEvents(ctx context.Context, priority string, since time.Dur
 	}
 
 	var events []Event
-	if err := c.doJSON(ctx, u, &events); err != nil {
+	if err := c.rest.GetJSON(ctx, u, &events); err != nil {
 		return nil, err
 	}
 	return events, nil
-}
-
-func (c *Client) doJSON(ctx context.Context, url string, dst any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return fmt.Errorf("create request: %w", err)
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("falcosidekick request failed: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return fmt.Errorf("falcosidekick returned %d: %s", resp.StatusCode, string(body))
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(dst); err != nil {
-		return fmt.Errorf("decode falcosidekick response: %w", err)
-	}
-	return nil
 }
 
 // ── Field helpers ───────────────────────────────────────────────────────────

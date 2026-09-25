@@ -2,30 +2,25 @@ package loki
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"net/url"
 	"strings"
 	"time"
-)
 
-const clientTimeout = 30 * time.Second
+	"github.com/Zuful/rikugan/pkg/restclient"
+)
 
 // Client is a thin wrapper around the Loki HTTP API.
 type Client struct {
-	baseURL    string
-	httpClient *http.Client
+	baseURL string
+	rest    *restclient.Client
 }
 
 // NewClient creates a Loki REST client.
 func NewClient(baseURL string) *Client {
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
-		httpClient: &http.Client{
-			Timeout: clientTimeout,
-		},
+		rest:    restclient.New("loki"),
 	}
 }
 
@@ -65,36 +60,13 @@ func (c *Client) QueryRange(ctx context.Context, query, start, end string, limit
 	u := fmt.Sprintf("%s/loki/api/v1/query_range?%s", c.baseURL, params.Encode())
 
 	var resp queryResponse
-	if err := c.doJSON(ctx, u, &resp); err != nil {
+	if err := c.rest.GetJSON(ctx, u, &resp); err != nil {
 		return nil, err
 	}
 	if resp.Status != "success" {
 		return nil, fmt.Errorf("loki query returned status: %s", resp.Status)
 	}
 	return resp.Data.Result, nil
-}
-
-func (c *Client) doJSON(ctx context.Context, url string, dst any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return fmt.Errorf("create request: %w", err)
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("loki request failed: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return fmt.Errorf("loki returned %d: %s", resp.StatusCode, string(body))
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(dst); err != nil {
-		return fmt.Errorf("decode loki response: %w", err)
-	}
-	return nil
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────

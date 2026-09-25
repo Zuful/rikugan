@@ -2,31 +2,25 @@ package argocd
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
-	"time"
-)
 
-const clientTimeout = 30 * time.Second
+	"github.com/Zuful/rikugan/pkg/restclient"
+)
 
 // Client is a thin wrapper around the Argo CD REST API.
 type Client struct {
-	baseURL    string
-	token      string
-	httpClient *http.Client
+	baseURL string
+	rest    *restclient.Client
 }
 
 // NewClient creates an Argo CD REST client.
 func NewClient(serverURL, token string) *Client {
 	return &Client{
 		baseURL: strings.TrimRight(serverURL, "/"),
-		token:   token,
-		httpClient: &http.Client{
-			Timeout: clientTimeout,
-		},
+		rest: restclient.New("argocd",
+			restclient.WithHeader("Authorization", "Bearer "+token),
+		),
 	}
 }
 
@@ -72,7 +66,7 @@ type applicationList struct {
 func (c *Client) GetApp(ctx context.Context, name string) (*Application, error) {
 	url := fmt.Sprintf("%s/api/v1/applications/%s", c.baseURL, name)
 	var app Application
-	if err := c.doJSON(ctx, url, &app); err != nil {
+	if err := c.rest.GetJSON(ctx, url, &app); err != nil {
 		return nil, err
 	}
 	return &app, nil
@@ -85,32 +79,8 @@ func (c *Client) ListApps(ctx context.Context, project string) ([]Application, e
 		url += "?project=" + project
 	}
 	var list applicationList
-	if err := c.doJSON(ctx, url, &list); err != nil {
+	if err := c.rest.GetJSON(ctx, url, &list); err != nil {
 		return nil, err
 	}
 	return list.Items, nil
-}
-
-func (c *Client) doJSON(ctx context.Context, url string, dst any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("argocd request failed: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return fmt.Errorf("argocd returned %d: %s", resp.StatusCode, string(body))
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(dst); err != nil {
-		return fmt.Errorf("decode argocd response: %w", err)
-	}
-	return nil
 }

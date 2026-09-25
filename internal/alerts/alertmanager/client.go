@@ -2,30 +2,24 @@ package alertmanager
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"io"
-	"net/http"
 	"net/url"
 	"strings"
 	"time"
-)
 
-const clientTimeout = 30 * time.Second
+	"github.com/Zuful/rikugan/pkg/restclient"
+)
 
 // Client is a thin wrapper around the AlertManager v2 REST API.
 type Client struct {
-	baseURL    string
-	httpClient *http.Client
+	baseURL string
+	rest    *restclient.Client
 }
 
 // NewClient creates an AlertManager REST client.
 func NewClient(baseURL string) *Client {
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
-		httpClient: &http.Client{
-			Timeout: clientTimeout,
-		},
+		rest:    restclient.New("alertmanager"),
 	}
 }
 
@@ -65,31 +59,8 @@ func (c *Client) ListAlerts(ctx context.Context, labelFilters []string) ([]Alert
 	}
 
 	var alerts []Alert
-	if err := c.doJSON(ctx, u, &alerts); err != nil {
+	if err := c.rest.GetJSON(ctx, u, &alerts); err != nil {
 		return nil, err
 	}
 	return alerts, nil
-}
-
-func (c *Client) doJSON(ctx context.Context, url string, dst any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return fmt.Errorf("create request: %w", err)
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("alertmanager request failed: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return fmt.Errorf("alertmanager returned %d: %s", resp.StatusCode, string(body))
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(dst); err != nil {
-		return fmt.Errorf("decode alertmanager response: %w", err)
-	}
-	return nil
 }
