@@ -14,9 +14,9 @@ pattern matters more than the latest one in isolation.
 
 | Question | Tool |
 |----------|------|
-| Is there an active incident open right now? | `pagerduty.list_active_incidents` |
-| Has this service been noisy lately? | `pagerduty.list_service_incidents` |
-| Who do I notify if I find something? | `pagerduty.get_current_oncalls` |
+| Is there an active alert/incident open right now? | `list_active_alerts` (concept tool; routes to the configured `ALERTS_PROVIDER` — alertmanager / sentry / pagerduty) |
+| Has this service been noisy lately? | `list_active_alerts` scoped with `service` (concept tool) — for a richer historical view set `ALERTS_PROVIDER=pagerduty` so the call hits PagerDuty's incident timeline |
+| Who do I notify if I find something? | `get_current_oncalls` (backend-specific tool — PagerDuty only; see MIGRATION.md for why it stays outside the concept interface) |
 
 This step is fast and cheap. Skipping it is how you end up parallel-paged
 with the on-call engineer on the same bug.

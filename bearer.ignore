@@ -1,0 +1,8 @@
+{
+  "b45a92d7463a65d12ac7b88c0b4f105e_0": {
+    "author": "Zuful",
+    "comment": "execRunner.Run: name is the literal \"docker\" at every call site and exec.CommandContext never invokes a shell, so argv entries cannot be reinterpreted as commands. The residual argument-injection risk (a name read as a flag) is closed by validateComposeName, which rejects any project or service name not matching ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ before it reaches this call. See the matching #nosec G204 in dockercompose.go.",
+    "false_positive": true,
+    "ignored_at": "2026-09-25T18:09:11Z"
+  }
+}

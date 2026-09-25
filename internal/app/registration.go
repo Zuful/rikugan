@@ -4,16 +4,13 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/Zuful/rikugan/internal/dispatcher"
-	"github.com/Zuful/rikugan/internal/provider"
-	"github.com/Zuful/rikugan/internal/provider/argocd"
-	"github.com/Zuful/rikugan/internal/provider/falco"
-	"github.com/Zuful/rikugan/internal/provider/github"
-	"github.com/Zuful/rikugan/internal/provider/gitlab"
-	"github.com/Zuful/rikugan/internal/provider/jaeger"
-	"github.com/Zuful/rikugan/internal/provider/loki"
-	"github.com/Zuful/rikugan/internal/provider/pagerduty"
-	"github.com/Zuful/rikugan/internal/provider/sentry"
+	"github.com/Zuful/rikugan/internal/security/falco"
+	"github.com/Zuful/rikugan/internal/tracing/jaeger"
+	"github.com/Zuful/rikugan/internal/versioning/argocd"
+	"github.com/Zuful/rikugan/internal/versioning/github"
+	"github.com/Zuful/rikugan/internal/versioning/gitlab"
+	"github.com/Zuful/rikugan/pkg/dispatcher"
+	"github.com/Zuful/rikugan/pkg/provider"
 )
 
 // optionalProvider couples a human-readable name with a closure that
@@ -67,27 +64,6 @@ func optionalProviders(logger *slog.Logger) []optionalProvider {
 				return nil, err
 			}
 			return falco.NewFromClient(c, falco.WithLogger(logger)), nil
-		}},
-		{"loki", func() (provider.Provider, error) {
-			c, err := loki.BuildClient("")
-			if err != nil {
-				return nil, err
-			}
-			return loki.NewFromClient(c, loki.WithLogger(logger)), nil
-		}},
-		{"sentry", func() (provider.Provider, error) {
-			c, err := sentry.BuildClient("", "", "")
-			if err != nil {
-				return nil, err
-			}
-			return sentry.NewFromClient(c, sentry.WithLogger(logger)), nil
-		}},
-		{"pagerduty", func() (provider.Provider, error) {
-			c, err := pagerduty.BuildClient("")
-			if err != nil {
-				return nil, err
-			}
-			return pagerduty.NewFromClient(c, pagerduty.WithLogger(logger)), nil
 		}},
 	}
 }

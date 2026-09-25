@@ -1,0 +1,126 @@
+package dispatcher
+
+import (
+	"context"
+	"log/slog"
+	"testing"
+
+	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
+
+	"github.com/Zuful/rikugan/pkg/provider"
+)
+
+// stubProvider is a minimal Provider for testing.
+type stubProvider struct {
+	name  string
+	tools []provider.ToolDefinition
+}
+
+func (s *stubProvider) Name() string                     { return s.name }
+func (s *stubProvider) Tools() []provider.ToolDefinition { return s.tools }
+
+func noopHandler(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return mcp.NewToolResultText("ok"), nil
+}
+
+func newTestDispatcher() *Dispatcher {
+	srv := server.NewMCPServer("test", "0.0.0")
+	return New(srv, slog.Default())
+}
+
+func TestRegister_ValidProvider(t *testing.T) {
+	d := newTestDispatcher()
+	p := &stubProvider{
+		name: "test-provider",
+		tools: []provider.ToolDefinition{
+			{
+				Tool:    mcp.NewTool("test_tool", mcp.WithDescription("a test tool")),
+				Handler: noopHandler,
+			},
+		},
+	}
+
+	if err := d.Register(p); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(d.Providers()) != 1 {
+		t.Fatalf("expected 1 provider, got %d", len(d.Providers()))
+	}
+	if d.Providers()[0].Name() != "test-provider" {
+		t.Errorf("expected provider name %q, got %q", "test-provider", d.Providers()[0].Name())
+	}
+}
+
+func TestRegister_ZeroToolProvider_IsAccepted(t *testing.T) {
+	t.Parallel()
+	d := newTestDispatcher()
+	p := &stubProvider{
+		name:  "concept-only-provider",
+		tools: nil,
+	}
+
+	if err := d.Register(p); err != nil {
+		t.Fatalf("unexpected error registering zero-tool provider: %v", err)
+	}
+	if got := len(d.Providers()); got != 1 {
+		t.Fatalf("expected provider list length 1, got %d", got)
+	}
+	if d.Providers()[0].Name() != "concept-only-provider" {
+		t.Errorf("provider name mismatch: %q", d.Providers()[0].Name())
+	}
+}
+
+func TestRegister_MixedZeroAndNonZeroToolProviders(t *testing.T) {
+	t.Parallel()
+	d := newTestDispatcher()
+
+	empty := &stubProvider{name: "concept-backend", tools: nil}
+	withTools := &stubProvider{
+		name: "concept-tools",
+		tools: []provider.ToolDefinition{
+			{Tool: mcp.NewTool("a_tool", mcp.WithDescription("x")), Handler: noopHandler},
+		},
+	}
+
+	if err := d.Register(empty); err != nil {
+		t.Fatalf("zero-tool register: %v", err)
+	}
+	if err := d.Register(withTools); err != nil {
+		t.Fatalf("with-tools register: %v", err)
+	}
+	if got := len(d.Providers()); got != 2 {
+		t.Fatalf("expected 2 providers, got %d", got)
+	}
+}
+
+func TestRegister_MultipleProviders(t *testing.T) {
+	d := newTestDispatcher()
+
+	for _, name := range []string{"alpha", "beta"} {
+		p := &stubProvider{
+			name: name,
+			tools: []provider.ToolDefinition{
+				{
+					Tool:    mcp.NewTool(name+"_tool", mcp.WithDescription("tool for "+name)),
+					Handler: noopHandler,
+				},
+			},
+		}
+		if err := d.Register(p); err != nil {
+			t.Fatalf("unexpected error registering %s: %v", name, err)
+		}
+	}
+
+	if len(d.Providers()) != 2 {
+		t.Fatalf("expected 2 providers, got %d", len(d.Providers()))
+	}
+}
+
+func TestProviders_EmptyByDefault(t *testing.T) {
+	d := newTestDispatcher()
+	if len(d.Providers()) != 0 {
+		t.Fatalf("expected 0 providers, got %d", len(d.Providers()))
+	}
+}
