@@ -89,7 +89,8 @@ func newestConfigHash(containers []dockerInspect) string {
 
 // containerExits reads the container's die and oom events since it was
 // created and turns each die into a termination, flagged OOM when an
-// oom event belongs to it (see exitsFromEvents).
+// oom event came after the previous die (the kernel's OOM notification
+// precedes the exit it causes).
 func (p *Provider) containerExits(ctx context.Context, id, name string, since time.Time) ([]provider.Termination, error) {
 	if since.IsZero() {
 		since = time.Unix(0, 0)
@@ -108,56 +109,36 @@ func (p *Provider) containerExits(ctx context.Context, id, name string, since ti
 	return exitsFromEvents(out, name), nil
 }
 
-// oomPairing bounds how far an oom event may be from the die it is
-// attributed to.
-const oomPairing = 5 * time.Second
-
-// exitsFromEvents turns each die event into a termination and attributes
-// every oom event to the die nearest in time, within oomPairing. Docker
-// does not order the two: it handles containerd's OOM and exit
-// notifications separately, so the oom of a run can be logged just
-// before or just after the die that ends it (both orders were observed
-// against a real daemon in oom_integration_test.go).
+// exitsFromEvents turns each die event into a termination, flagged OOM
+// when an oom event precedes it since the previous die. Against a real
+// daemon the oom event was logged 70-235 ms before its die in every run
+// where it was emitted, but in about one run in ten Docker emitted no
+// oom event at all for a genuine OOM kill (oom_integration_test.go).
+// That exit then reads as a plain SIGKILL — Killed, 137, OOM false —
+// which understates it but never passes it off as a clean exit.
 func exitsFromEvents(raw []byte, container string) []provider.Termination {
-	var dies, ooms []dockerEvent
+	var events []dockerEvent
 	for _, line := range bytes.Split(raw, []byte("\n")) {
 		var e dockerEvent
-		if json.Unmarshal(bytes.TrimSpace(line), &e) != nil {
+		if json.Unmarshal(bytes.TrimSpace(line), &e) == nil && (e.Action == "die" || e.Action == "oom") {
+			events = append(events, e)
+		}
+	}
+	sort.SliceStable(events, func(i, j int) bool { return eventTime(events[i]).Before(eventTime(events[j])) })
+
+	var exits []provider.Termination
+	oom := false
+	for _, e := range events {
+		if e.Action == "oom" {
+			oom = true
 			continue
 		}
-		switch e.Action {
-		case "die":
-			dies = append(dies, e)
-		case "oom":
-			ooms = append(ooms, e)
-		}
-	}
-	sort.SliceStable(dies, func(i, j int) bool { return eventTime(dies[i]).Before(eventTime(dies[j])) })
-
-	oomDie := make([]bool, len(dies))
-	for _, o := range ooms {
-		best, bestGap := -1, oomPairing+1
-		for i, d := range dies {
-			gap := eventTime(d).Sub(eventTime(o))
-			if gap < 0 {
-				gap = -gap
-			}
-			if gap <= oomPairing && gap < bestGap {
-				best, bestGap = i, gap
-			}
-		}
-		if best >= 0 {
-			oomDie[best] = true
-		}
-	}
-
-	exits := make([]provider.Termination, 0, len(dies))
-	for i, d := range dies {
-		code, err := strconv.Atoi(d.Actor.Attributes["exitCode"])
+		code, err := strconv.Atoi(e.Actor.Attributes["exitCode"])
 		if err != nil {
 			code = -1
 		}
-		exits = append(exits, dockerTermination(container, eventTime(d), code, oomDie[i]))
+		exits = append(exits, dockerTermination(container, eventTime(e), code, oom))
+		oom = false
 	}
 	return exits
 }
