@@ -19,7 +19,7 @@ planned but not yet on the critical path (P2).
 | 3 | Metrics | `metrics` | P0 | `MetricsProvider` | prometheus | newrelic (#6) |
 | 4 | Alerts | `alerts` | P0 | `AlertsProvider` | alertmanager, sentry, pagerduty | — |
 | 5a | Versioning — commits, diffs | `versioning` | P1 | none yet | github, gitlab | — |
-| 5b | Deployments — rollouts, deployed revisions | `deployments` | P1 | `DeploymentSource` *(planned, proactive mode phase 1)* | none yet — see below | kubernetes (phase 1), dockercompose (phase 2), argocd (phase 3) |
+| 5b | Deployments — rollouts, deployed revisions | `deployments` | P1 | `DeploymentSource` | kubernetes | dockercompose (proactive mode phase 2), argocd (phase 3) |
 | 6 | Incidents and tickets | `incidents` | P1 | none yet | none as a concept — see below | — |
 | 7 | Team communication | `communication` | P1 | `CommunicationProvider` *(planned, proactive mode phase 2)* | none yet | telegram, slack (phase 2) |
 | 8 | CI/CD | `cicd` | P2 | none yet | none | — |
@@ -42,7 +42,8 @@ been moved yet; these are the known gaps.
 - **`internal/versioning/kubernetes`** (`get_image_provenance`) maps a
   running image back to a commit. It is the bridge between 5b and 5a:
   it reads deployment state and answers in versioning terms. It stays in
-  `versioning` until `deployments` exists, then moves there.
+  `versioning` for now; moving it to `deployments`, which now exists, is
+  a pending follow-up.
 - **PagerDuty** lives under `alerts` and implements `AlertsProvider`.
   Its incident timeline and `get_current_oncalls` are concept 6 material;
   they stay in `alerts` until a second incident/ticketing backend
@@ -54,7 +55,9 @@ been moved yet; these are the known gaps.
 - **Correlation** (`internal/correlation/runes`: `six_eyes`) is not a
   concept. It is a cross-concept layer that combines several concepts to
   answer one question, and by design never has a backend interface of
-  its own. The proactive mode's `check_deploy_health` belongs here too.
+  its own. `check_deploy_health` (`internal/correlation/deployhealth`)
+  belongs here too: it reads deployments, orchestration and metrics
+  through their interfaces, and its rules live in `internal/health`.
 
 ## Why "versioning and deployments" was split in two
 
@@ -85,10 +88,10 @@ Rikugan's rule is that a concept gets an interface in `pkg/provider` once
 a second backend makes the abstraction honest. One backend alone tends
 to produce an interface shaped like that backend's API.
 
-`deployments` breaks this rule on purpose, for one phase. It gets its
-interface in proactive mode phase 1 with kubernetes as its only backend;
-dockercompose joins in phase 2 and argocd in phase 3. This is accepted
-because:
+`deployments` breaks this rule on purpose, for one phase. It got its
+interface in proactive mode phase 1 (#34) with kubernetes as its only
+backend; dockercompose joins in phase 2 and argocd in phase 3. This is
+accepted because:
 
 - the proactive mode's rules engine must depend on a concept interface,
   not on Kubernetes, from day one. Otherwise it would have to be
@@ -100,8 +103,8 @@ because:
 - the interface is kept minimal (`LastRollout`, then `WatchRollouts`) to
   limit how much of Kubernetes can leak into it.
 
-If dockercompose does not fit when it lands, the interface changes. Being wrong
-here costs one refactor of a small, internal interface.
+If dockercompose does not fit when it lands, the interface changes.
+Being wrong here costs one refactor of a small, internal interface.
 
 `communication` gets its interface in phase 2 with two backends
 (telegram, slack) arriving together, so it follows the rule.
