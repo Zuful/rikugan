@@ -10,5 +10,11 @@
     "comment": "health.LoadSettings: the path comes from RIKUGAN_HEALTH_CONFIG, set by the operator who runs rikugan, with the same trust as KUBECONFIG or PROMETHEUS_URL. No MCP request or remote input reaches it, and the file is only parsed as YAML into a typed struct with unknown keys rejected. See the matching #nosec G304 in settings.go.",
     "false_positive": true,
     "ignored_at": "2026-10-18T14:05:00Z"
+  },
+  "bfa5df24b0eb1b8fd7b996c3e98aab8f_0": {
+    "author": "Zuful",
+    "comment": "journal.replayFile: the path is the operator's state directory (RIKUGAN_STATE_DIR, same trust as KUBECONFIG) joined with either the fixed name verdicts.jsonl or a rotated name the journal lists itself and accepts only if it parses as verdicts-<timestamp>.jsonl. No MCP request or remote input reaches it. See the matching #nosec G304 in journal.go.",
+    "false_positive": true,
+    "ignored_at": "2026-10-18T20:40:00Z"
   }
 }
