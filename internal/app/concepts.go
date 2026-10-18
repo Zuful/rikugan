@@ -157,69 +157,80 @@ func registerLogsConcept(d *dispatcher.Dispatcher, logger *slog.Logger) error {
 // to build (missing env config) is warned-and-skipped, matching the
 // rest of optional providers; dispatcher registration errors are fatal.
 func registerAlertsConcept(d *dispatcher.Dispatcher, logger *slog.Logger) error {
-	type backend struct {
-		name string
-		impl provider.AlertsProvider
-	}
-	var available []backend
-
-	if c, err := alertmanager.BuildClient(""); err == nil {
-		p := alertmanager.NewFromClient(c, alertmanager.WithLogger(logger))
-		available = append(available, backend{name: "alertmanager", impl: p})
-	} else {
-		logger.Warn("alertmanager backend not available, skipping", slog.String("reason", err.Error()))
-	}
-	if c, err := sentry.BuildClient("", "", ""); err == nil {
-		p := sentry.NewFromClient(c, sentry.WithLogger(logger))
-		available = append(available, backend{name: "sentry", impl: p})
-		if err := d.Register(p); err != nil {
-			return fmt.Errorf("register sentry provider: %w", err)
-		}
-	} else {
-		logger.Warn("sentry backend not available, skipping", slog.String("reason", err.Error()))
-	}
-	if c, err := pagerduty.BuildClient(""); err == nil {
-		p := pagerduty.NewFromClient(c, pagerduty.WithLogger(logger))
-		available = append(available, backend{name: "pagerduty", impl: p})
-		if err := d.Register(p); err != nil {
-			return fmt.Errorf("register pagerduty provider: %w", err)
-		}
-	} else {
-		logger.Warn("pagerduty backend not available, skipping", slog.String("reason", err.Error()))
-	}
-
-	if len(available) == 0 {
-		logger.Warn("alerts concept: no backend available, skipping")
-		return nil
-	}
-
-	requested := os.Getenv("ALERTS_PROVIDER")
-	var chosen backend
-	if requested != "" {
-		for _, b := range available {
-			if b.name == requested {
-				chosen = b
-				break
+	available := availableAlertsBackends(logger)
+	for _, b := range available {
+		if b.registerTools {
+			if err := d.Register(b.impl); err != nil {
+				return fmt.Errorf("register %s provider: %w", b.name, err)
 			}
 		}
-		if chosen.impl == nil {
-			logger.Warn("ALERTS_PROVIDER not available, falling back to first available",
-				slog.String("requested", requested),
-				slog.String("fallback", available[0].name),
-			)
-			chosen = available[0]
-		}
-	} else {
-		chosen = available[0]
 	}
-
-	logger.Info("alerts concept primary selected",
-		slog.String("backend", chosen.name),
-	)
+	chosen, ok := primaryAlertsBackend(available, logger)
+	if !ok {
+		return nil
+	}
 	if err := d.Register(alerts.NewConceptProvider(chosen.impl, chosen.name, logger)); err != nil {
 		return fmt.Errorf("register alerts concept provider: %w", err)
 	}
 	return nil
+}
+
+type alertsBackend struct {
+	name string
+	impl provider.AlertsProvider
+	// registerTools is set for backends with tools of their own
+	// (sentry's release attribution, pagerduty's on-call rotation).
+	registerTools bool
+}
+
+// availableAlertsBackends builds every alerts backend whose environment
+// is configured, in priority order (alertmanager > sentry > pagerduty).
+// A backend missing its configuration is warned about and skipped.
+func availableAlertsBackends(logger *slog.Logger) []alertsBackend {
+	var available []alertsBackend
+	if c, err := alertmanager.BuildClient(""); err == nil {
+		available = append(available, alertsBackend{name: "alertmanager", impl: alertmanager.NewFromClient(c, alertmanager.WithLogger(logger))})
+	} else {
+		logger.Warn("alertmanager backend not available, skipping", slog.String("reason", err.Error()))
+	}
+	if c, err := sentry.BuildClient("", "", ""); err == nil {
+		available = append(available, alertsBackend{name: "sentry", impl: sentry.NewFromClient(c, sentry.WithLogger(logger)), registerTools: true})
+	} else {
+		logger.Warn("sentry backend not available, skipping", slog.String("reason", err.Error()))
+	}
+	if c, err := pagerduty.BuildClient(""); err == nil {
+		available = append(available, alertsBackend{name: "pagerduty", impl: pagerduty.NewFromClient(c, pagerduty.WithLogger(logger)), registerTools: true})
+	} else {
+		logger.Warn("pagerduty backend not available, skipping", slog.String("reason", err.Error()))
+	}
+	return available
+}
+
+// primaryAlertsBackend picks the backend named by ALERTS_PROVIDER, or the
+// first available one. It reports false when none is available.
+func primaryAlertsBackend(available []alertsBackend, logger *slog.Logger) (alertsBackend, bool) {
+	if len(available) == 0 {
+		logger.Warn("alerts concept: no backend available, skipping")
+		return alertsBackend{}, false
+	}
+	chosen := available[0]
+	if requested := os.Getenv("ALERTS_PROVIDER"); requested != "" {
+		found := false
+		for _, b := range available {
+			if b.name == requested {
+				chosen, found = b, true
+				break
+			}
+		}
+		if !found {
+			logger.Warn("ALERTS_PROVIDER not available, falling back to first available",
+				slog.String("requested", requested),
+				slog.String("fallback", chosen.name),
+			)
+		}
+	}
+	logger.Info("alerts concept primary selected", slog.String("backend", chosen.name))
+	return chosen, true
 }
 
 // registerDeployHealth registers check_deploy_health when its three

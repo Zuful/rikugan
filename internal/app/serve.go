@@ -7,7 +7,9 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 
+	"github.com/Zuful/rikugan/internal/communication"
 	deployk8s "github.com/Zuful/rikugan/internal/deployments/kubernetes"
 	"github.com/Zuful/rikugan/internal/health"
 	"github.com/Zuful/rikugan/internal/metrics/prometheus"
@@ -65,6 +67,11 @@ func Serve(ctx context.Context, logger, verdicts *slog.Logger) error {
 		return err
 	}
 
+	notifier, err := serveNotifier(logger)
+	if err != nil {
+		return err
+	}
+
 	j, err := journal.Open(stateDir, journal.Options{})
 	if err != nil {
 		return err
@@ -85,6 +92,7 @@ func Serve(ctx context.Context, logger, verdicts *slog.Logger) error {
 			cfg, _ := settings.For(svc)
 			return cfg
 		},
+		Notifier: notifier,
 		Verdicts: verdicts,
 		Logger:   logger,
 	}
@@ -93,6 +101,32 @@ func Serve(ctx context.Context, logger, verdicts *slog.Logger) error {
 		slog.String("namespaces", strings.Join(namespaces, ",")),
 	)
 	return daemon.Run(ctx)
+}
+
+// serveNotifier builds the notification side: every configured channel
+// (a half-configured one stops the daemon rather than going silent), the
+// primary alerts backend if any, consulted before each message, and
+// RIKUGAN_NOTIFY_ON_OK.
+func serveNotifier(logger *slog.Logger) (*watch.Notifier, error) {
+	channels, err := communication.Configured(logger)
+	if err != nil {
+		return nil, fmt.Errorf("notification channels: %w", err)
+	}
+	if len(channels) == 0 {
+		logger.Warn("no notification channel configured: verdicts are recorded but nobody is told",
+			slog.String("hint", "set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID, or SLACK_WEBHOOK_URL"))
+	}
+	n := &watch.Notifier{
+		Channels:   channels,
+		NotifyOnOK: os.Getenv("RIKUGAN_NOTIFY_ON_OK") == "true",
+		Logger:     logger,
+		Retries:    3,
+		Backoff:    5 * time.Second,
+	}
+	if b, ok := primaryAlertsBackend(availableAlertsBackends(logger), logger); ok {
+		n.Alerts = b.impl
+	}
+	return n, nil
 }
 
 // serveNamespaces returns the namespaces whose rollouts are watched:
