@@ -16,5 +16,11 @@
     "comment": "journal.replayFile: the path is the operator's state directory (RIKUGAN_STATE_DIR, same trust as KUBECONFIG) joined with either the fixed name verdicts.jsonl or a rotated name the journal lists itself and accepts only if it parses as verdicts-<timestamp>.jsonl. No MCP request or remote input reaches it. See the matching #nosec G304 in journal.go.",
     "false_positive": true,
     "ignored_at": "2026-10-18T20:40:00Z"
+  },
+  "a65cc629af6863fdf50fdb3bb5308b33_0": {
+    "author": "Zuful",
+    "comment": "watch.Lock: the path is the operator's state directory (RIKUGAN_STATE_DIR, same trust as KUBECONFIG) joined with the fixed name \"lock\". No MCP request or remote input reaches it. See the matching #nosec G304 in lock_unix.go.",
+    "false_positive": true,
+    "ignored_at": "2026-10-18T22:00:00Z"
   }
 }
