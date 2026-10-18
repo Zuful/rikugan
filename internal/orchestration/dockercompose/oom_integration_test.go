@@ -123,14 +123,48 @@ func rawState(ctx context.Context, t *testing.T, project string) string {
 	return string(out)
 }
 
+// rawEvents reports the container's die and oom events in log order,
+// e.g. "oom@…221 die@…224 (oom before die)", so CI shows which order
+// Docker used on each run.
 func rawEvents(ctx context.Context, t *testing.T, project string) string {
 	t.Helper()
-	out, err := exec.CommandContext(ctx, "docker", "events", "--since", "10m", "--until", "0s",
-		"--filter", "label=com.docker.compose.project="+project,
-		"--filter", "event=die", "--filter", "event=oom",
-		"--format", "{{.Action}}@{{.TimeNano}}").Output()
+	out, err := exec.CommandContext(ctx, "docker", "ps", "-a", "-q", "--filter", "label=com.docker.compose.project="+project).Output()
 	if err != nil {
 		return "error: " + err.Error()
 	}
-	return strings.Join(strings.Fields(string(out)), " ")
+	id := strings.TrimSpace(string(out))
+	out, err = exec.CommandContext(ctx, "docker", "events",
+		"--since", time.Now().Add(-10*time.Minute).UTC().Format(time.RFC3339),
+		"--until", time.Now().UTC().Format(time.RFC3339Nano),
+		"--filter", "container="+id,
+		"--filter", "event=die", "--filter", "event=oom",
+		"--format", "{{json .}}").Output()
+	if err != nil {
+		return "error: " + err.Error()
+	}
+	var parts []string
+	var oomAt, dieAt int64
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		var e dockerEvent
+		if json.Unmarshal([]byte(line), &e) != nil {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s@%d", e.Action, e.TimeNano))
+		switch e.Action {
+		case "oom":
+			oomAt = e.TimeNano
+		case "die":
+			if dieAt == 0 {
+				dieAt = e.TimeNano
+			}
+		}
+	}
+	order := "no oom event"
+	switch {
+	case oomAt != 0 && oomAt <= dieAt:
+		order = fmt.Sprintf("oom before die by %s", time.Duration(dieAt-oomAt))
+	case oomAt != 0:
+		order = fmt.Sprintf("oom AFTER die by %s", time.Duration(oomAt-dieAt))
+	}
+	return strings.Join(parts, " ") + " (" + order + ")"
 }
