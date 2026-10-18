@@ -23,14 +23,23 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 )
 
 const (
-	imageA = "registry.k8s.io/pause:3.10"
-	imageB = "registry.k8s.io/pause:3.9"
+	// agnhost serves HTTP so the pods can carry a readiness probe. The
+	// probe's initial delay keeps new pods unready for several seconds,
+	// which forces the controller through intermediate "rollout in
+	// progress" syncs on every scale-up and pod replacement. With pods
+	// that are ready instantly (pause), those syncs never happen and a
+	// rewrite of the Progressing condition would go unnoticed.
+	image      = "registry.k8s.io/e2e-test-images/agnhost:2.53"
+	readyDelay = 8 // seconds
+	versionA   = "a"
+	versionB   = "b"
 
 	pollInterval = time.Second
 	pollTimeout  = 3 * time.Minute
@@ -47,7 +56,7 @@ func TestIntegration_RolloutTimestamps(t *testing.T) {
 	ns := createNamespace(ctx, t, cs)
 	const name = "probe"
 
-	_, err := cs.AppsV1().Deployments(ns).Create(ctx, deployment(name, imageA, 1), metav1.CreateOptions{})
+	_, err := cs.AppsV1().Deployments(ns).Create(ctx, deployment(name, versionA, 1), metav1.CreateOptions{})
 	if err != nil {
 		t.Fatalf("create deployment: %v", err)
 	}
@@ -62,21 +71,31 @@ func TestIntegration_RolloutTimestamps(t *testing.T) {
 
 	// Each of these must leave the rollout untouched: same revision,
 	// same StartedAt, same CompletedAt.
+	//
+	// slowReady marks the scenarios that create pods: they must be seen
+	// going through a not-yet-available phase, otherwise the scenario did
+	// not exercise the controller's in-progress syncs and proves nothing.
 	unchanged := []struct {
-		name   string
-		mutate func(t *testing.T)
+		name      string
+		replicas  int
+		slowReady bool
+		mutate    func(t *testing.T)
 	}{
-		{"scale 1 to 3", func(t *testing.T) { scale(ctx, t, cs, ns, name, 3) }},
-		{"scale 3 to 1", func(t *testing.T) { scale(ctx, t, cs, ns, name, 1) }},
-		{"annotate deployment metadata", func(t *testing.T) {
+		{"scale 1 to 3", 3, true, func(t *testing.T) { scale(ctx, t, cs, ns, name, 3) }},
+		{"replace a pod", 3, true, func(t *testing.T) { deleteOnePod(ctx, t, cs, ns, base.TemplateKey) }},
+		{"scale 3 to 1", 1, false, func(t *testing.T) { scale(ctx, t, cs, ns, name, 1) }},
+		{"annotate deployment metadata", 1, false, func(t *testing.T) {
 			patch(ctx, t, cs, ns, name, `{"metadata":{"annotations":{"probe/touched":"yes"}}}`)
 		}},
-		{"replace a pod", func(t *testing.T) { deleteOnePod(ctx, t, cs, ns, base.TemplateKey) }},
 	}
 	for _, tc := range unchanged {
 		t.Run(tc.name, func(t *testing.T) {
 			time.Sleep(settle)
 			tc.mutate(t)
+			sawUnready := waitPodsReady(ctx, t, cs, ns, base.TemplateKey, tc.replicas)
+			if tc.slowReady && !sawUnready {
+				t.Fatalf("no unready pod observed: the scenario did not exercise an in-progress sync")
+			}
 			got := waitComplete(ctx, t, cs, ns, name)
 			t.Logf("after %s: %+v", tc.name, got)
 			if got.Revision != base.Revision {
@@ -92,14 +111,14 @@ func TestIntegration_RolloutTimestamps(t *testing.T) {
 	}
 
 	time.Sleep(settle)
-	setImage(ctx, t, cs, ns, name, imageB)
+	setVersion(ctx, t, cs, ns, name, versionB)
 	upgrade := waitComplete(ctx, t, cs, ns, name)
-	t.Logf("after image change: %+v", upgrade)
+	t.Logf("after template change: %+v", upgrade)
 	if upgrade.Revision == base.Revision {
-		t.Fatalf("image change did not produce a new revision")
+		t.Fatalf("template change did not produce a new revision")
 	}
 	if upgrade.Rollback {
-		t.Errorf("image change reported as rollback")
+		t.Errorf("template change reported as rollback")
 	}
 	if !upgrade.StartedAt.After(base.CompletedAt) {
 		t.Errorf("new StartedAt %s not after previous CompletedAt %s", upgrade.StartedAt, base.CompletedAt)
@@ -113,7 +132,7 @@ func TestIntegration_RolloutTimestamps(t *testing.T) {
 
 	time.Sleep(settle)
 	rollbackStart := time.Now().Add(-time.Second) // creationTimestamp is truncated to the second
-	setImage(ctx, t, cs, ns, name, imageA)
+	setVersion(ctx, t, cs, ns, name, versionA)
 	rollback := waitComplete(ctx, t, cs, ns, name)
 	t.Logf("after rollback: %+v", rollback)
 	if !rollback.Rollback {
@@ -165,7 +184,11 @@ func createNamespace(ctx context.Context, t *testing.T, cs kubernetes.Interface)
 	return ns.Name
 }
 
-func deployment(name, image string, replicas int32) *appsv1.Deployment {
+// deployment builds a Deployment whose pod template differs only by the
+// PROBE_VERSION env var, so switching versions is a template change
+// (new revision) and switching back is a rollback to the first
+// ReplicaSet.
+func deployment(name, version string, replicas int32) *appsv1.Deployment {
 	sel := map[string]string{"app": name}
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
@@ -176,7 +199,19 @@ func deployment(name, image string, replicas int32) *appsv1.Deployment {
 				ObjectMeta: metav1.ObjectMeta{Labels: sel},
 				Spec: corev1.PodSpec{
 					TerminationGracePeriodSeconds: new(int64),
-					Containers:                    []corev1.Container{{Name: "pause", Image: image}},
+					Containers: []corev1.Container{{
+						Name:  "app",
+						Image: image,
+						Args:  []string{"netexec", "--http-port=8080"},
+						Env:   []corev1.EnvVar{{Name: "PROBE_VERSION", Value: version}},
+						ReadinessProbe: &corev1.Probe{
+							ProbeHandler: corev1.ProbeHandler{
+								HTTPGet: &corev1.HTTPGetAction{Path: "/", Port: intstr.FromInt32(8080)},
+							},
+							InitialDelaySeconds: readyDelay,
+							PeriodSeconds:       1,
+						},
+					}},
 				},
 			},
 		},
@@ -200,14 +235,55 @@ func waitComplete(ctx context.Context, t *testing.T, cs kubernetes.Interface, ns
 	return st
 }
 
+// waitPodsReady waits until exactly want live pods of the template exist
+// and all are Ready, and reports whether it saw any of them unready on
+// the way. Polling pods directly (rather than the Deployment status)
+// rules out reading a status the controller has not updated yet.
+func waitPodsReady(ctx context.Context, t *testing.T, cs kubernetes.Interface, ns, templateKey string, want int) (sawUnready bool) {
+	t.Helper()
+	sel := metav1.ListOptions{LabelSelector: labelPodTemplateHash + "=" + templateKey}
+	err := wait.PollUntilContextTimeout(ctx, 500*time.Millisecond, pollTimeout, true, func(ctx context.Context) (bool, error) {
+		pods, err := cs.CoreV1().Pods(ns).List(ctx, sel)
+		if err != nil {
+			return false, nil
+		}
+		live, ready := 0, 0
+		for _, p := range pods.Items {
+			if p.DeletionTimestamp != nil {
+				continue
+			}
+			live++
+			if podReady(&p) {
+				ready++
+			} else {
+				sawUnready = true
+			}
+		}
+		return live == want && ready == want, nil
+	})
+	if err != nil {
+		t.Fatalf("pods of template %s never reached %d ready: %v", templateKey, want, err)
+	}
+	return sawUnready
+}
+
+func podReady(p *corev1.Pod) bool {
+	for _, c := range p.Status.Conditions {
+		if c.Type == corev1.PodReady {
+			return c.Status == corev1.ConditionTrue
+		}
+	}
+	return false
+}
+
 func scale(ctx context.Context, t *testing.T, cs kubernetes.Interface, ns, name string, replicas int32) {
 	t.Helper()
 	patch(ctx, t, cs, ns, name, fmt.Sprintf(`{"spec":{"replicas":%d}}`, replicas))
 }
 
-func setImage(ctx context.Context, t *testing.T, cs kubernetes.Interface, ns, name, image string) {
+func setVersion(ctx context.Context, t *testing.T, cs kubernetes.Interface, ns, name, version string) {
 	t.Helper()
-	patch(ctx, t, cs, ns, name, fmt.Sprintf(`{"spec":{"template":{"spec":{"containers":[{"name":"pause","image":%q}]}}}}`, image))
+	patch(ctx, t, cs, ns, name, fmt.Sprintf(`{"spec":{"template":{"spec":{"containers":[{"name":"app","env":[{"name":"PROBE_VERSION","value":%q}]}]}}}}`, version))
 }
 
 func patch(ctx context.Context, t *testing.T, cs kubernetes.Interface, ns, name, body string) {
