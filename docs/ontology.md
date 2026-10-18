@@ -19,7 +19,7 @@ planned but not yet on the critical path (P2).
 | 3 | Metrics | `metrics` | P0 | `MetricsProvider` | prometheus | newrelic (#6) |
 | 4 | Alerts | `alerts` | P0 | `AlertsProvider` | alertmanager, sentry, pagerduty | — |
 | 5a | Versioning — commits, diffs | `versioning` | P1 | none yet | github, gitlab | — |
-| 5b | Deployments — rollouts, deployed revisions | `deployments` | P1 | `DeploymentSource` *(planned, proactive mode phase 1)* | none yet — see below | kubernetes (phase 1), argocd (phase 3), dockercompose (later) |
+| 5b | Deployments — rollouts, deployed revisions | `deployments` | P1 | `DeploymentSource` *(planned, proactive mode phase 1)* | none yet — see below | kubernetes (phase 1), dockercompose (phase 2), argocd (phase 3) |
 | 6 | Incidents and tickets | `incidents` | P1 | none yet | none as a concept — see below | — |
 | 7 | Team communication | `communication` | P1 | `CommunicationProvider` *(planned, proactive mode phase 2)* | none yet | telegram, slack (phase 2) |
 | 8 | CI/CD | `cicd` | P2 | none yet | none | — |
@@ -85,20 +85,22 @@ Rikugan's rule is that a concept gets an interface in `pkg/provider` once
 a second backend makes the abstraction honest. One backend alone tends
 to produce an interface shaped like that backend's API.
 
-`deployments` breaks this rule on purpose. It gets its interface in
-proactive mode phase 1 with kubernetes as its only backend, and stays
-single-backend until argocd arrives in phase 3. This is accepted because:
+`deployments` breaks this rule on purpose, for one phase. It gets its
+interface in proactive mode phase 1 with kubernetes as its only backend;
+dockercompose joins in phase 2 and argocd in phase 3. This is accepted
+because:
 
 - the proactive mode's rules engine must depend on a concept interface,
   not on Kubernetes, from day one. Otherwise it would have to be
   rewritten when the second backend lands;
-- the second backend (argocd) is already planned, with a known shape
-  (sync succeeded, then rollout observed complete), so the interface can
-  be checked against it on paper now;
+- the second backend (dockercompose) is planned for the very next
+  phase, with a known shape (a new `com.docker.compose.config-hash` on
+  the service's containers, complete once they are all ready), so the
+  interface can be checked against it on paper now;
 - the interface is kept minimal (`LastRollout`, then `WatchRollouts`) to
   limit how much of Kubernetes can leak into it.
 
-If argocd does not fit when it lands, the interface changes. Being wrong
+If dockercompose does not fit when it lands, the interface changes. Being wrong
 here costs one refactor of a small, internal interface.
 
 `communication` gets its interface in phase 2 with two backends
