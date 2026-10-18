@@ -44,7 +44,7 @@ const oomCompose = `services:
 // first versions of this test passed twice before a run logged them the
 // other way round. The scenario is therefore repeated to give the race
 // a chance to show up in every CI run.
-const oomRuns = 5
+const oomRuns = 20
 
 func TestIntegration_OOMKilledAfterRestart(t *testing.T) {
 	if _, err := exec.LookPath("docker"); err != nil {
@@ -99,7 +99,7 @@ func oomScenario(t *testing.T, project string) {
 		t.Fatalf("want one termination record for the OOM-killed first run, got %+v", inst.Terminations)
 	}
 	if term := inst.Terminations[0]; !term.OOM {
-		t.Errorf("the first run was OOM-killed, but after the restart the instance reports %+v", term)
+		t.Errorf("the first run was OOM-killed, but after the restart the instance reports %+v (events: %s)", term, rawEvents(ctx, t, project))
 	}
 }
 
