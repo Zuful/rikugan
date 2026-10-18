@@ -152,7 +152,17 @@ func (q verdictQuery) matches(service string) bool {
 func readVerdicts(j *journal.Journal, q verdictQuery) ([]Verdict, error) {
 	var out []Verdict
 	_, err := j.Replay(func(rec journal.Record) error {
-		if rec.Kind != KindCheck || rec.Time.Before(q.since) || !q.matches(rec.Service) {
+		if (rec.Kind != KindCheck && rec.Kind != KindSweep) || rec.Time.Before(q.since) || !q.matches(rec.Service) {
+			return nil
+		}
+		if rec.Kind == KindSweep {
+			var sw sweepRecord
+			if json.Unmarshal(rec.Data, &sw) == nil {
+				out = append(out, Verdict{
+					Time: rec.Time, Service: rec.Service, Source: "sweep", Revision: sw.Revision,
+					Outcome: sw.Outcome, Verdict: sw.Verdict, Signals: sw.Signals, Notes: sw.Notes,
+				})
+			}
 			return nil
 		}
 		var c checkRecord

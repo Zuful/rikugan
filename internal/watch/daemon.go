@@ -65,6 +65,8 @@ type Daemon struct {
 	Settings func(provider.Service) health.Config
 	// Checkpoints defaults to health.Checkpoints.
 	Checkpoints []time.Duration
+	// Sweep, when set, turns on the periodic sweep.
+	Sweep *SweepConfig
 	// Notifier, when set, applies the noise policy to each check and
 	// sends what it decides.
 	Notifier *Notifier
@@ -77,7 +79,9 @@ type Daemon struct {
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
 
-	services map[string]*serviceState
+	services  map[string]*serviceState
+	sweeps    map[string]*sweepServiceState
+	lastSweep time.Time
 }
 
 type serviceState struct {
@@ -250,6 +254,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 // Replay rebuilds the daemon's state from the journal.
 func (d *Daemon) Replay() error {
 	d.services = map[string]*serviceState{}
+	d.sweeps = map[string]*sweepServiceState{}
+	d.lastSweep = time.Time{}
 	skipped, err := d.Journal.Replay(func(rec journal.Record) error {
 		switch rec.Kind {
 		case KindRollout:
@@ -258,6 +264,8 @@ func (d *Daemon) Replay() error {
 				r := rr.rollout()
 				d.rolloutState(r).apply(r)
 			}
+		case KindSweep:
+			d.replaySweep(rec.Service, rec.Time, rec.Data)
 		case KindNotification:
 			var n notificationRecord
 			if json.Unmarshal(rec.Data, &n) != nil {
@@ -360,8 +368,9 @@ func (rs *rolloutState) apply(r provider.Rollout) {
 	rs.reported[r.State] = true
 }
 
-// RunDue runs the checks whose time has come and returns when the next
-// one is due (zero when none is pending).
+// RunDue runs the checks whose time has come, and the periodic sweep
+// when it is due, and returns when the next one is due (zero when none
+// is pending).
 //
 // After a restart, several checkpoints of a rollout may be overdue:
 // only the latest is run, late, and the others are recorded as skipped,
@@ -430,6 +439,16 @@ func (d *Daemon) RunDue(ctx context.Context) (time.Time, error) {
 			if !rs.checked[cp] && (next.IsZero() || rs.retryAt.Before(next)) {
 				next = rs.retryAt
 			}
+		}
+	}
+	if d.Sweep != nil {
+		if !d.nextSweep().After(now) {
+			if err := d.runSweep(ctx); err != nil {
+				return time.Time{}, err
+			}
+		}
+		if due := d.nextSweep(); next.IsZero() || due.Before(next) {
+			next = due
 		}
 	}
 	return next, nil

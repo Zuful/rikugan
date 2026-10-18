@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Zuful/rikugan/internal/health"
+	"github.com/Zuful/rikugan/internal/watch/sweep"
 	"github.com/Zuful/rikugan/pkg/provider"
 )
 
@@ -182,20 +183,47 @@ func (n *Notifier) message(ctx context.Context, c Check, d decision) provider.Te
 	if c.Late {
 		b.WriteString("Late check: the daemon was down at the checkpoint.\n")
 	}
-	for _, s := range c.Report.Signals {
+	n.writeFindings(ctx, &b, r.Service, c.Report)
+	return provider.TeamMessage{Severity: d.Severity, Title: title, Body: strings.TrimSpace(b.String())}
+}
+
+// writeFindings appends the signals that are not ok, the notes, and the
+// alerts already firing for the service.
+func (n *Notifier) writeFindings(ctx context.Context, b *strings.Builder, svc provider.Service, rep health.Report) {
+	for _, s := range rep.Signals {
 		if s.Status == health.StatusDegraded || s.Status == health.StatusInvestigate {
-			fmt.Fprintf(&b, "- %s: %s, %s\n", s.Name, s.Status, s.Reason)
+			fmt.Fprintf(b, "- %s: %s, %s\n", s.Name, s.Status, s.Reason)
 		}
 	}
-	for _, note := range c.Report.Notes {
-		fmt.Fprintf(&b, "- %s\n", note)
+	for _, note := range rep.Notes {
+		fmt.Fprintf(b, "- %s\n", note)
 	}
-	titles, alertNote := n.openAlerts(ctx, r.Service)
+	titles, alertNote := n.openAlerts(ctx, svc)
 	if len(titles) > 0 {
-		fmt.Fprintf(&b, "Already firing for this service (%d): %s\n", len(titles), strings.Join(titles, "; "))
+		fmt.Fprintf(b, "Already firing for this service (%d): %s\n", len(titles), strings.Join(titles, "; "))
 	}
 	if alertNote != "" {
 		b.WriteString(alertNote + "\n")
 	}
-	return provider.TeamMessage{Severity: d.Severity, Title: title, Body: strings.TrimSpace(b.String())}
+}
+
+// sweepMessage renders a sweep notification.
+func (n *Notifier) sweepMessage(ctx context.Context, svc provider.Service, rep health.Report, note sweep.Notification) provider.TeamMessage {
+	key := serviceKey(svc)
+	var title string
+	switch note.Event {
+	case sweep.EventIncident:
+		title = fmt.Sprintf("%s: degraded (periodic sweep)", key)
+	case sweep.EventPersistentWarning:
+		title = fmt.Sprintf("%s: investigate for %d sweeps in a row", key, note.Streak)
+	case sweep.EventResolved:
+		title = fmt.Sprintf("%s: resolved, two sweeps ok in a row", key)
+	default:
+		title = fmt.Sprintf("%s: investigate (periodic sweep)", key)
+	}
+	var b strings.Builder
+	if note.Event != sweep.EventResolved {
+		n.writeFindings(ctx, &b, svc, rep)
+	}
+	return provider.TeamMessage{Severity: note.Severity, Title: title, Body: strings.TrimSpace(b.String())}
 }

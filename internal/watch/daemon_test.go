@@ -22,12 +22,17 @@ type fakeSource struct {
 	provider.DeploymentSource
 	mu      sync.Mutex
 	current provider.Rollout
-	events  chan provider.Rollout
+	// bySvc overrides current per namespace/name.
+	bySvc  map[string]provider.Rollout
+	events chan provider.Rollout
 }
 
-func (f *fakeSource) LastRollout(context.Context, provider.Service) (provider.Rollout, error) {
+func (f *fakeSource) LastRollout(_ context.Context, svc provider.Service) (provider.Rollout, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if r, ok := f.bySvc[serviceKey(svc)]; ok {
+		return r, nil
+	}
 	return f.current, nil
 }
 
