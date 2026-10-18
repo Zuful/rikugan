@@ -413,10 +413,11 @@ func parseComposePS(raw []byte) []composePS {
 // --format {{json .}}` into provider.Event values. Unknown fields are
 // preserved in Message for the operator to read.
 type dockerEvent struct {
-	Type   string `json:"Type"`   // container, image, network, ...
-	Action string `json:"Action"` // start, die, kill, ...
-	Time   int64  `json:"time"`   // unix epoch seconds
-	Actor  struct {
+	Type     string `json:"Type"`     // container, image, network, ...
+	Action   string `json:"Action"`   // start, die, kill, ...
+	Time     int64  `json:"time"`     // unix epoch seconds
+	TimeNano int64  `json:"timeNano"` // unix epoch nanoseconds, for ordering events within a second
+	Actor    struct {
 		ID         string            `json:"ID"`
 		Attributes map[string]string `json:"Attributes"`
 	} `json:"Actor"`

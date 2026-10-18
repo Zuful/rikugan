@@ -10,12 +10,14 @@ import (
 	"github.com/Zuful/rikugan/pkg/provider"
 )
 
-// inspectRunner answers `docker compose ps` with a fixed listing and
-// `docker inspect <id>` per container id, which the shared stubRunner
-// (keyed by subcommand only) cannot do.
+// inspectRunner answers `docker compose ps` with a fixed listing, and
+// `docker inspect <id>` and `docker events --filter container=<id>` per
+// container id, which the shared stubRunner (keyed by subcommand only)
+// cannot do.
 type inspectRunner struct {
 	ps       string
 	inspects map[string]string
+	events   map[string]string
 }
 
 func (r *inspectRunner) Run(_ context.Context, _ string, args ...string) ([]byte, error) {
@@ -27,6 +29,12 @@ func (r *inspectRunner) Run(_ context.Context, _ string, args ...string) ([]byte
 			return []byte(out), nil
 		}
 		return nil, fmt.Errorf("no such container %s", args[1])
+	case len(args) > 0 && args[0] == "events":
+		for _, a := range args {
+			if id, ok := strings.CutPrefix(a, "container="); ok {
+				return []byte(r.events[id]), nil
+			}
+		}
 	}
 	return nil, nil
 }
@@ -43,9 +51,10 @@ func inspectJSON(id, name, created, hash string, restarts int, state string) str
 }
 
 const (
-	stRunning   = `{"Status":"running","Running":true,"StartedAt":"2026-10-18T10:00:05Z","FinishedAt":"0001-01-01T00:00:00Z"}`
-	stRestarted = `{"Status":"running","Running":true,"ExitCode":137,"OOMKilled":true,"StartedAt":"2026-10-18T10:03:00Z","FinishedAt":"2026-10-18T10:02:58Z"}`
-	stKilled    = `{"Status":"running","Running":true,"ExitCode":137,"OOMKilled":false,"StartedAt":"2026-10-18T10:03:00Z","FinishedAt":"2026-10-18T10:02:58Z"}`
+	stRunning = `{"Status":"running","Running":true,"StartedAt":"2026-10-18T10:00:05Z","FinishedAt":"0001-01-01T00:00:00Z"}`
+	// Running again after a restart: Docker has reset ExitCode and
+	// OOMKilled, only FinishedAt still describes the previous run.
+	stRestarted = `{"Status":"running","Running":true,"ExitCode":0,"OOMKilled":false,"StartedAt":"2026-10-18T10:03:00Z","FinishedAt":"2026-10-18T10:02:58Z"}`
 	stLooping   = `{"Status":"restarting","Running":true,"Restarting":true,"ExitCode":1,"StartedAt":"2026-10-18T10:04:00Z","FinishedAt":"2026-10-18T10:04:30Z"}`
 	stUnhealthy = `{"Status":"running","Running":true,"StartedAt":"2026-10-18T10:00:05Z","FinishedAt":"0001-01-01T00:00:00Z",
 		"Health":{"Status":"unhealthy","FailingStreak":3,"Log":[
@@ -57,6 +66,36 @@ const (
 		"Health":{"Status":"starting","FailingStreak":0,"Log":[]}}`
 	stExited = `{"Status":"exited","Running":false,"ExitCode":2,"StartedAt":"2026-10-18T10:00:05Z","FinishedAt":"2026-10-18T10:01:00Z"}`
 )
+
+// The kernel's OOM notification precedes the exit it causes, within the
+// sub-second; timeNano orders them.
+const oomEvent = `{"Type":"container","Action":"oom","time":1792317777,"timeNano":1792317777900000000,"Actor":{"ID":"c1"}}`
+
+func dieEvent(code int) string {
+	return fmt.Sprintf(`{"Type":"container","Action":"die","time":1792317778,"timeNano":1792317778000000000,"Actor":{"ID":"c1","Attributes":{"exitCode":"%d"}}}`, code)
+}
+
+func TestExitsFromEvents_PairsEachOOMWithTheNextDie(t *testing.T) {
+	raw := strings.Join([]string{
+		`{"Action":"die","timeNano":3000,"Actor":{"Attributes":{"exitCode":"1"}}}`,
+		`{"Action":"oom","timeNano":1000}`,
+		`{"Action":"die","timeNano":2000,"Actor":{"Attributes":{"exitCode":"137"}}}`,
+		`{"Action":"die","timeNano":4000,"Actor":{"Attributes":{"exitCode":"137"}}}`,
+	}, "\n")
+	got := exitsFromEvents([]byte(raw), "c")
+	want := []struct {
+		reason string
+		oom    bool
+	}{{"OOMKilled", true}, {"Error", false}, {"Killed", false}}
+	if len(got) != len(want) {
+		t.Fatalf("got %d terminations, want %d: %+v", len(got), len(want), got)
+	}
+	for i, w := range want {
+		if got[i].Reason != w.reason || got[i].OOM != w.oom {
+			t.Errorf("termination %d: got %s oom=%v, want %s oom=%v", i, got[i].Reason, got[i].OOM, w.reason, w.oom)
+		}
+	}
+}
 
 func at(s string) time.Time {
 	t, err := time.Parse(time.RFC3339, s)
@@ -100,9 +139,10 @@ func TestGetRevisionInstances_DefaultsToNewestConfigHash(t *testing.T) {
 func TestContainerInstance(t *testing.T) {
 	created := "2026-10-18T10:00:00Z"
 	tests := []struct {
-		name  string
-		state string
-		want  provider.Instance
+		name   string
+		state  string
+		events string
+		want   provider.Instance
 	}{
 		{
 			name:  "running without healthcheck is ready",
@@ -110,17 +150,26 @@ func TestContainerInstance(t *testing.T) {
 			want:  provider.Instance{Ready: true},
 		},
 		{
-			name:  "attested OOM",
-			state: stRestarted,
+			name:   "OOM attested by the event log survives the restart",
+			state:  stRestarted,
+			events: oomEvent + "\n" + dieEvent(137),
 			want: provider.Instance{Ready: true, RestartCount: 1, Terminations: []provider.Termination{
 				{Container: "web-api-1", Time: at("2026-10-18T10:02:58Z"), Reason: "OOMKilled", ExitCode: 137, OOM: true},
 			}},
 		},
 		{
-			name:  "137 without OOMKilled is a kill",
-			state: stKilled,
+			name:   "137 without an oom event is a kill",
+			state:  stRestarted,
+			events: dieEvent(137),
 			want: provider.Instance{Ready: true, RestartCount: 1, Terminations: []provider.Termination{
 				{Container: "web-api-1", Time: at("2026-10-18T10:02:58Z"), Reason: "Killed", ExitCode: 137},
+			}},
+		},
+		{
+			name:  "restarted with the events gone: unknown, not the clean exit inspect claims",
+			state: stRestarted,
+			want: provider.Instance{Ready: true, RestartCount: 1, Terminations: []provider.Termination{
+				{Container: "web-api-1", Time: at("2026-10-18T10:02:58Z"), Reason: "Unknown", ExitCode: -1},
 			}},
 		},
 		{
@@ -154,6 +203,7 @@ func TestContainerInstance(t *testing.T) {
 			r := &inspectRunner{
 				ps:       psLine("c1", "web-api-1", "api"),
 				inspects: map[string]string{"c1": inspectJSON("c1", "web-api-1", created, "h", restarts, tc.state)},
+				events:   map[string]string{"c1": tc.events},
 			}
 			got, err := New(WithRunner(r)).GetRevisionInstances(context.Background(), provider.Service{Name: "api", Namespace: "web"}, "h")
 			if err != nil {

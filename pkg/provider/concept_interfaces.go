@@ -89,10 +89,11 @@ type Instance struct {
 	// restarts since the rollout.
 	RestartCount int
 	CrashLooping bool
-	// Terminations holds the most recent termination of each container
-	// that has one. Both Kubernetes and Docker keep only the last one;
-	// older terminations are gone, which is why RestartCount, not this
-	// list, is the authoritative restart signal.
+	// Terminations holds the terminations the runtime still knows
+	// about, oldest first: the last one per container on Kubernetes,
+	// possibly several on Docker (read from its event log). Older ones
+	// may be gone, which is why RestartCount, not this list, is the
+	// authoritative restart signal.
 	Terminations []Termination
 }
 
@@ -100,8 +101,8 @@ type Instance struct {
 type Termination struct {
 	Container string
 	Time      time.Time
-	Reason    string // OOMKilled, Killed, Error, Completed, or the runtime's own reason
-	ExitCode  int
+	Reason    string // OOMKilled, Killed, Error, Completed, Unknown, or the runtime's own reason
+	ExitCode  int    // -1 when the runtime no longer knows it (Reason Unknown)
 	// OOM is true only when the runtime attests it (Kubernetes reason
 	// OOMKilled, Docker State.OOMKilled). Exit code 137 alone means
 	// SIGKILL — also what docker stop/kill and eviction produce — and
