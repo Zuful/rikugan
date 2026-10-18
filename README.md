@@ -51,7 +51,7 @@ The full list of concepts Rikugan models, with priorities and planned backends, 
 | Logs | `GetLogs` / `TailLogs` / `SearchLogs` | loki |
 | Metrics | `GetMetric` / `CompareToBaseline` / `ListAvailableMetrics` | prometheus |
 | Alerts | `ListActiveAlerts` / `GetAlertDetails` | alertmanager, sentry, pagerduty (one selected as primary via `ALERTS_PROVIDER`; others register their backend-specific extras only) |
-| Deployments | `LastRollout` / `WatchRollouts` | kubernetes |
+| Deployments | `LastRollout` / `WatchRollouts` | kubernetes, docker-compose (follows `ORCHESTRATION_PROVIDER`) |
 | Communication | `PostMessage` | telegram, slack — every configured channel receives the proactive mode's notifications; no MCP tool, messages leave from the daemon |
 
 Three concepts ship tools without a concept interface yet (the interface lands once a second backend exists to keep the abstraction honest):
@@ -431,7 +431,7 @@ The minutes after the rollout completed — up to the latest checkpoint reached,
 
 Latency and error rate are only evaluated with at least 200 requests in each window. Below that, at +5 and +15, a blunt error regression (5xx above 20 % with at least 10 errors) is still `degraded` (`blunt_rule: false` turns this off); otherwise the verdict is `insufficient_data` unless another signal fires. An `ok` verdict needs latency or error rate to be evaluable, and the report then lists every signal it could not evaluate. A stalled rollout (Kubernetes `ProgressDeadlineExceeded`) is `degraded`. A rollout still in progress or completed under 5 minutes ago gets no verdict, but its new revision's restarts and readiness are reported; one completed over 2 hours ago gets no verdict.
 
-Requires `ORCHESTRATION_PROVIDER=kubernetes` (rollout detection is Kubernetes-only for now) and a metrics backend. The default PromQL templates assume `http_requests_total` / `http_request_duration_seconds` with `namespace` and `service` labels, and cAdvisor container metrics. Thresholds and templates can be overridden per service with a YAML file named by `RIKUGAN_HEALTH_CONFIG`:
+Works on both orchestration backends (`ORCHESTRATION_PROVIDER=kubernetes` or `dockercompose`; on Compose, `namespace` is the project) and needs a metrics backend. The default PromQL templates assume `http_requests_total` / `http_request_duration_seconds` with `namespace` and `service` labels, and cAdvisor container metrics; on Compose, where scrape labels depend on your setup, override them. Thresholds and templates can be overridden per service with a YAML file named by `RIKUGAN_HEALTH_CONFIG`:
 
 ```yaml
 defaults:
@@ -534,7 +534,7 @@ RIKUGAN_SERVE_NAMESPACES=shop,payments \
   ./bin/rikugan serve
 ```
 
-It runs as a **single instance**: a lock on the state directory makes a second one refuse to start, but that lock is unreliable on network file systems, where the state directory must not live. Rollout detection is Kubernetes-only for now. Packaging (Helm, Compose, systemd) is the next step.
+It runs as a **single instance**: a lock on the state directory makes a second one refuse to start, but that lock is unreliable on network file systems, where the state directory must not live. Rollouts are detected on the orchestration backend, Kubernetes or Docker Compose. On Compose, a rollout is a new `config-hash` on a service's containers, complete once they are all ready (healthy, or running without a healthcheck) and no older one runs; one not complete after `RIKUGAN_COMPOSE_ROLLOUT_DEADLINE` (default 10 min) is failed. Packaging (Helm, Compose, systemd) is the next step.
 
 **Periodic sweep.** Every 4 hours (`RIKUGAN_SWEEP_INTERVAL`, `off` to disable), every service of the swept namespaces (`RIKUGAN_SWEEP_NAMESPACES`, default the watched ones; `RIKUGAN_SWEEP_EXCLUDE` leaves some out) is checked for what rollouts do not catch: a slow degradation, a dependency going down, a memory leak. The last hour is compared with the same hour a week earlier (a day earlier when the week is missing); restarts count since the previous sweep; traffic only flags a collapse; a memory leak needs a steady rise of at least 25 % and 100 MiB per replica that traffic does not explain. Services with a rollout under 2 hours old are left to the rollout checks. Per service, a degraded sweep is notified `critical` once per incident and "resolved" after two OK sweeps in a row; an investigate verdict is only notified once it has lasted three sweeps in a row (`RIKUGAN_SWEEP_WARNING_PERSISTENCE`), or at once with `RIKUGAN_SWEEP_NOTIFY_WARNING=true`.
 
@@ -615,7 +615,8 @@ You can also wire one entry per per-concept binary if you prefer to keep them is
 | `TELEGRAM_CHAT_ID`          | Chat or channel the bot posts to                              | With `TELEGRAM_BOT_TOKEN` |
 | `SLACK_WEBHOOK_URL`         | Slack incoming-webhook URL (https)                            | For proactive-mode notifications to Slack (read by `rikugan serve`, in progress) |
 | `RIKUGAN_STATE_DIR`         | `rikugan serve`: journal and lock directory (local disk, not NFS) | No (defaults to `/var/lib/rikugan`) |
-| `RIKUGAN_SERVE_NAMESPACES`  | `rikugan serve`: comma-separated namespaces whose rollouts are watched | Outside a pod (in a pod, defaults to its own namespace) |
+| `RIKUGAN_SERVE_NAMESPACES`  | `rikugan serve`: comma-separated namespaces (Compose projects on Docker Compose) whose rollouts are watched | Outside a pod (in a pod, defaults to its own namespace; on Compose, to `COMPOSE_PROJECT_NAME`) |
+| `RIKUGAN_COMPOSE_ROLLOUT_DEADLINE` | Docker Compose: time after which a revision whose containers are not all ready is failed | No (defaults to `10m`) |
 | `RIKUGAN_SERVE_LISTEN`      | `rikugan serve`: verdicts API address                         | No (defaults to `127.0.0.1:8080`) |
 | `RIKUGAN_SERVE_TOKEN`       | Bearer token of the verdicts API; read by `rikugan serve` and by `get_watch_reports` | Required when `RIKUGAN_SERVE_LISTEN` is not loopback |
 | `RIKUGAN_SERVE_URL`         | Address of a running `rikugan serve`, for `get_watch_reports` | When the tool is wanted |

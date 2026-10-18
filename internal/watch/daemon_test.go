@@ -400,3 +400,17 @@ func TestRunFollowsEventsAndCheckpoints(t *testing.T) {
 		t.Errorf("checks %q", got)
 	}
 }
+
+func TestNewerPrefersStartTimesOverRevisionNumbers(t *testing.T) {
+	// Compose revisions are config-hashes: a short hash made of digits
+	// only must not be compared as a number.
+	older := provider.Rollout{Sequence: "900000000000", StartedAt: t0}
+	later := provider.Rollout{Sequence: "100000000000", StartedAt: t0.Add(time.Minute)}
+	if !newer(later, older) || newer(older, later) {
+		t.Error("start times must decide")
+	}
+	// A skipped revision is known by its number only.
+	if !newer(provider.Rollout{Sequence: "4"}, provider.Rollout{Sequence: "3", StartedAt: t0}) {
+		t.Error("revision numbers decide without a start time")
+	}
+}

@@ -49,8 +49,8 @@ func (p *Provider) Tools() []provider.ToolDefinition {
 				"rollout is degraded; one completed over 2 hours ago gets no verdict. "+
 				"[Methodology: Step 0 — what changed? and LEST, all four signals — see docs/methodology.md]",
 		),
-		mcp.WithString("name", mcp.Required(), mcp.Description("Service name (Deployment name in kubernetes).")),
-		mcp.WithString("namespace", mcp.Required(), mcp.Description("Kubernetes namespace.")),
+		mcp.WithString("name", mcp.Required(), mcp.Description("Service name: the Deployment on Kubernetes, the service on Docker Compose.")),
+		mcp.WithString("namespace", mcp.Required(), mcp.Description("Kubernetes namespace, or Docker Compose project.")),
 	)
 	return []provider.ToolDefinition{{Tool: tool, Handler: p.handle}}
 }
