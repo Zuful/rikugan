@@ -49,6 +49,10 @@ func (f *fakeOrch) GetServiceHistory(_ context.Context, _ provider.Service) (str
 	return f.history, nil
 }
 
+func (f *fakeOrch) GetRevisionInstances(_ context.Context, _ provider.Service, _ string) ([]provider.Instance, error) {
+	return nil, nil
+}
+
 func TestConceptProvider_RegistersSixCanonicalTools(t *testing.T) {
 	t.Parallel()
 	cp := NewConceptProvider(&fakeOrch{}, "fake", nil)
