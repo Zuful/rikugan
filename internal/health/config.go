@@ -64,6 +64,16 @@ type Config struct {
 
 	UnavailableGrace        time.Duration // instances added after the rollout
 	RolloutUnavailableGrace time.Duration // instances created by the rollout
+
+	// Memory-leak detection of the periodic sweep (design §6): memory
+	// per replica up over the last LeakSpan by at least both thresholds,
+	// and not explained by traffic.
+	LeakSpan             time.Duration
+	LeakMinIncreasePct   float64
+	LeakMinIncreaseBytes float64
+	// LeakMaxTrafficGrowth is the traffic growth over LeakSpan under
+	// which a memory rise cannot be load.
+	LeakMaxTrafficGrowth float64
 }
 
 // DefaultConfig returns the thresholds of the design (issue #4, v3.5).
@@ -101,5 +111,10 @@ func DefaultConfig() Config {
 
 		UnavailableGrace:        2 * time.Minute,
 		RolloutUnavailableGrace: 60 * time.Second,
+
+		LeakSpan:             6 * time.Hour,
+		LeakMinIncreasePct:   0.25,
+		LeakMinIncreaseBytes: 100 << 20,
+		LeakMaxTrafficGrowth: 0.10,
 	}
 }
