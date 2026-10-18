@@ -15,6 +15,7 @@ package dockercompose
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -39,16 +40,29 @@ const oomCompose = `services:
     command: ["sh", "-c", "if [ -f /oomed ]; then exec sleep 3600; fi; touch /oomed; dd if=/dev/zero of=/dev/null bs=128M count=1"]
 `
 
+// Repeated because Docker is not consistent: in about one run in ten
+// it emits no oom event for a genuine OOM kill (cgroup v2 runners), so
+// a single run says little either way. Each run checks what the
+// provider can guarantee: the OOM is attested whenever Docker reported
+// it, and otherwise the exit reads as a SIGKILL, never as the clean
+// exit docker inspect claims after the restart.
+const oomRuns = 10
+
 func TestIntegration_OOMKilledAfterRestart(t *testing.T) {
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker not available")
 	}
+	for i := 0; i < oomRuns; i++ {
+		t.Run(fmt.Sprintf("run %d", i+1), func(t *testing.T) { oomScenario(t, fmt.Sprintf("rikugan-oom-probe-%d", i+1)) })
+	}
+}
+
+func oomScenario(t *testing.T, project string) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte(oomCompose), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	const project = "rikugan-oom-probe"
 	compose := func(args ...string) {
 		t.Helper()
 		cmd := exec.CommandContext(ctx, "docker", append([]string{"compose", "-p", project, "-f", filepath.Join(dir, "compose.yaml")}, args...)...)
@@ -85,8 +99,20 @@ func TestIntegration_OOMKilledAfterRestart(t *testing.T) {
 	if len(inst.Terminations) != 1 {
 		t.Fatalf("want one termination record for the OOM-killed first run, got %+v", inst.Terminations)
 	}
-	if term := inst.Terminations[0]; !term.OOM {
-		t.Errorf("the first run was OOM-killed, but after the restart the instance reports %+v", term)
+	events := rawEvents(ctx, t, project)
+	t.Logf("docker events: %s", events)
+	term := inst.Terminations[0]
+	switch {
+	case strings.Contains(events, "oom@"):
+		if !term.OOM || term.Reason != "OOMKilled" {
+			t.Errorf("Docker reported the OOM, but the instance reports %+v", term)
+		}
+	default:
+		// Docker dropped the oom event: the best we can say is SIGKILL.
+		t.Logf("Docker emitted no oom event for this OOM kill")
+		if term.Reason != "Killed" || term.ExitCode != 137 {
+			t.Errorf("without an oom event the exit must read as a SIGKILL, got %+v", term)
+		}
 	}
 }
 
@@ -108,4 +134,50 @@ func rawState(ctx context.Context, t *testing.T, project string) string {
 		return string(b)
 	}
 	return string(out)
+}
+
+// rawEvents reports the container's die and oom events in log order,
+// e.g. "oom@…221 die@…224 (oom before die)", so CI shows which order
+// Docker used on each run.
+func rawEvents(ctx context.Context, t *testing.T, project string) string {
+	t.Helper()
+	out, err := exec.CommandContext(ctx, "docker", "ps", "-a", "-q", "--filter", "label=com.docker.compose.project="+project).Output()
+	if err != nil {
+		return "error: " + err.Error()
+	}
+	id := strings.TrimSpace(string(out))
+	out, err = exec.CommandContext(ctx, "docker", "events",
+		"--since", time.Now().Add(-10*time.Minute).UTC().Format(time.RFC3339),
+		"--until", time.Now().UTC().Format(time.RFC3339Nano),
+		"--filter", "container="+id,
+		"--filter", "event=die", "--filter", "event=oom",
+		"--format", "{{json .}}").Output()
+	if err != nil {
+		return "error: " + err.Error()
+	}
+	var parts []string
+	var oomAt, dieAt int64
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		var e dockerEvent
+		if json.Unmarshal([]byte(line), &e) != nil {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s@%d", e.Action, e.TimeNano))
+		switch e.Action {
+		case "oom":
+			oomAt = e.TimeNano
+		case "die":
+			if dieAt == 0 {
+				dieAt = e.TimeNano
+			}
+		}
+	}
+	order := "no oom event"
+	switch {
+	case oomAt != 0 && oomAt <= dieAt:
+		order = fmt.Sprintf("oom before die by %s", time.Duration(dieAt-oomAt))
+	case oomAt != 0:
+		order = fmt.Sprintf("oom AFTER die by %s", time.Duration(oomAt-dieAt))
+	}
+	return strings.Join(parts, " ") + " (" + order + ")"
 }

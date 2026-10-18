@@ -53,7 +53,8 @@ func Setup(logger *slog.Logger, version string) (*server.MCPServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build k8s client: %w", err)
 	}
-	if err := registerOrchestrationConcept(d, k8sClient, logger); err != nil {
+	orch, err := registerOrchestrationConcept(d, k8sClient, logger)
+	if err != nil {
 		return nil, err
 	}
 	if err := d.Register(versk8s.NewFromClient(k8sClient, versk8s.WithLogger(logger))); err != nil {
@@ -75,7 +76,7 @@ func Setup(logger *slog.Logger, version string) (*server.MCPServer, error) {
 	if err := registerAlertsConcept(d, logger); err != nil {
 		return nil, err
 	}
-	promAPI, err := registerMetricsConcept(d, logger)
+	promAPI, metricsProvider, err := registerMetricsConcept(d, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -88,6 +89,14 @@ func Setup(logger *slog.Logger, version string) (*server.MCPServer, error) {
 		if err := d.Register(runes.New(k8sClient, promAPI, runes.WithLogger(logger))); err != nil {
 			return nil, fmt.Errorf("register runes provider: %w", err)
 		}
+	}
+
+	// ── Deploy health (correlation): check_deploy_health reads the
+	//    deployments, orchestration and metrics concepts. The only
+	//    DeploymentSource today is Kubernetes, so it needs the
+	//    kubernetes orchestration backend and a metrics backend.
+	if err := registerDeployHealth(d, k8sClient, orch, metricsProvider, logger); err != nil {
+		return nil, err
 	}
 
 	return mcpSrv, nil
@@ -114,7 +123,7 @@ func SetupOrchestration(logger *slog.Logger, version string) (*server.MCPServer,
 		}
 		k8sClient = c
 	}
-	if err := registerOrchestrationConcept(d, k8sClient, logger); err != nil {
+	if _, err := registerOrchestrationConcept(d, k8sClient, logger); err != nil {
 		return nil, err
 	}
 	return mcpSrv, nil
@@ -142,7 +151,7 @@ func SetupMetrics(logger *slog.Logger, version string) (*server.MCPServer, error
 	mcpSrv := pkgmcp.NewServer("rikugan-metrics", version)
 	d := dispatcher.New(mcpSrv, logger)
 
-	if _, err := registerMetricsConcept(d, logger); err != nil {
+	if _, _, err := registerMetricsConcept(d, logger); err != nil {
 		return nil, err
 	}
 	return mcpSrv, nil

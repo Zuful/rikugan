@@ -80,6 +80,7 @@ func TestExitsFromEvents_PairsEachOOMWithTheNextDie(t *testing.T) {
 		`{"Action":"die","timeNano":3000,"Actor":{"Attributes":{"exitCode":"1"}}}`,
 		`{"Action":"oom","timeNano":1000}`,
 		`{"Action":"die","timeNano":2000,"Actor":{"Attributes":{"exitCode":"137"}}}`,
+		// A genuine OOM kill for which Docker emitted no oom event.
 		`{"Action":"die","timeNano":4000,"Actor":{"Attributes":{"exitCode":"137"}}}`,
 	}, "\n")
 	got := exitsFromEvents([]byte(raw), "c")

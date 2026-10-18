@@ -109,6 +109,13 @@ func (p *Provider) containerExits(ctx context.Context, id, name string, since ti
 	return exitsFromEvents(out, name), nil
 }
 
+// exitsFromEvents turns each die event into a termination, flagged OOM
+// when an oom event precedes it since the previous die. Against a real
+// daemon the oom event was logged 70-235 ms before its die in every run
+// where it was emitted, but in about one run in ten Docker emitted no
+// oom event at all for a genuine OOM kill (oom_integration_test.go).
+// That exit then reads as a plain SIGKILL — Killed, 137, OOM false —
+// which understates it but never passes it off as a clean exit.
 func exitsFromEvents(raw []byte, container string) []provider.Termination {
 	var events []dockerEvent
 	for _, line := range bytes.Split(raw, []byte("\n")) {

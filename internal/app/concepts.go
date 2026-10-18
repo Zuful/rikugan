@@ -12,6 +12,9 @@ import (
 	"github.com/Zuful/rikugan/internal/alerts/alertmanager"
 	"github.com/Zuful/rikugan/internal/alerts/pagerduty"
 	"github.com/Zuful/rikugan/internal/alerts/sentry"
+	"github.com/Zuful/rikugan/internal/correlation/deployhealth"
+	deployk8s "github.com/Zuful/rikugan/internal/deployments/kubernetes"
+	"github.com/Zuful/rikugan/internal/health"
 	"github.com/Zuful/rikugan/internal/logs"
 	"github.com/Zuful/rikugan/internal/logs/loki"
 	"github.com/Zuful/rikugan/internal/metrics"
@@ -50,7 +53,7 @@ import (
 // client at all (nil-safe contract on dockercompose). The guard
 // below catches a misuse where kubernetes is selected without a
 // client.
-func registerOrchestrationConcept(d *dispatcher.Dispatcher, k8sClient kubernetes.Interface, logger *slog.Logger) error {
+func registerOrchestrationConcept(d *dispatcher.Dispatcher, k8sClient kubernetes.Interface, logger *slog.Logger) (provider.OrchestrationProvider, error) {
 	backend := os.Getenv("ORCHESTRATION_PROVIDER")
 	if backend == "" {
 		backend = "kubernetes"
@@ -58,16 +61,16 @@ func registerOrchestrationConcept(d *dispatcher.Dispatcher, k8sClient kubernetes
 	switch backend {
 	case "kubernetes":
 		if k8sClient == nil {
-			return fmt.Errorf("ORCHESTRATION_PROVIDER=kubernetes requires a kubernetes client (check KUBECONFIG)")
+			return nil, fmt.Errorf("ORCHESTRATION_PROVIDER=kubernetes requires a kubernetes client (check KUBECONFIG)")
 		}
 		orchKube := orchk8s.NewFromClient(k8sClient, orchk8s.WithLogger(logger))
 		if err := d.Register(orchKube); err != nil {
-			return fmt.Errorf("register orchestration/kubernetes provider: %w", err)
+			return nil, fmt.Errorf("register orchestration/kubernetes provider: %w", err)
 		}
 		if err := d.Register(orchestration.NewConceptProvider(orchKube, "kubernetes", logger)); err != nil {
-			return fmt.Errorf("register orchestration concept provider: %w", err)
+			return nil, fmt.Errorf("register orchestration concept provider: %w", err)
 		}
-		return nil
+		return orchKube, nil
 	case "dockercompose":
 		opts := []dockercompose.Option{dockercompose.WithLogger(logger)}
 		if project := os.Getenv("COMPOSE_PROJECT_NAME"); project != "" {
@@ -75,27 +78,27 @@ func registerOrchestrationConcept(d *dispatcher.Dispatcher, k8sClient kubernetes
 		}
 		dcProvider := dockercompose.New(opts...)
 		if err := d.Register(dcProvider); err != nil {
-			return fmt.Errorf("register orchestration/dockercompose provider: %w", err)
+			return nil, fmt.Errorf("register orchestration/dockercompose provider: %w", err)
 		}
 		if err := d.Register(orchestration.NewConceptProvider(dcProvider, "dockercompose", logger)); err != nil {
-			return fmt.Errorf("register orchestration concept provider: %w", err)
+			return nil, fmt.Errorf("register orchestration concept provider: %w", err)
 		}
-		return nil
+		return dcProvider, nil
 	default:
 		logger.Warn("ORCHESTRATION_PROVIDER unknown, falling back to kubernetes",
 			slog.String("requested", backend),
 		)
 		if k8sClient == nil {
-			return fmt.Errorf("ORCHESTRATION_PROVIDER=%q is unknown and the kubernetes fallback has no client", backend)
+			return nil, fmt.Errorf("ORCHESTRATION_PROVIDER=%q is unknown and the kubernetes fallback has no client", backend)
 		}
 		orchKube := orchk8s.NewFromClient(k8sClient, orchk8s.WithLogger(logger))
 		if err := d.Register(orchKube); err != nil {
-			return fmt.Errorf("register orchestration/kubernetes provider: %w", err)
+			return nil, fmt.Errorf("register orchestration/kubernetes provider: %w", err)
 		}
 		if err := d.Register(orchestration.NewConceptProvider(orchKube, "kubernetes", logger)); err != nil {
-			return fmt.Errorf("register orchestration concept provider: %w", err)
+			return nil, fmt.Errorf("register orchestration concept provider: %w", err)
 		}
-		return nil
+		return orchKube, nil
 	}
 }
 
@@ -104,19 +107,19 @@ func registerOrchestrationConcept(d *dispatcher.Dispatcher, k8sClient kubernetes
 // list_available_metrics). On missing PROMETHEUS_URL the call is
 // warn-and-skip and returns a nil promv1.API so the caller (runes) can
 // skip itself too.
-func registerMetricsConcept(d *dispatcher.Dispatcher, logger *slog.Logger) (promv1.API, error) {
+func registerMetricsConcept(d *dispatcher.Dispatcher, logger *slog.Logger) (promv1.API, provider.MetricsProvider, error) {
 	promAPI, err := prometheus.BuildAPI("")
 	if err != nil {
 		logger.Warn("metrics concept (prometheus) not available, skipping",
 			slog.String("reason", err.Error()),
 		)
-		return nil, nil
+		return nil, nil, nil
 	}
 	promProvider := prometheus.NewFromAPI(promAPI, prometheus.WithLogger(logger))
 	if err := d.Register(metrics.NewConceptProvider(promProvider, "prometheus", logger)); err != nil {
-		return nil, fmt.Errorf("register metrics concept provider: %w", err)
+		return nil, nil, fmt.Errorf("register metrics concept provider: %w", err)
 	}
-	return promAPI, nil
+	return promAPI, promProvider, nil
 }
 
 // registerLogsConcept builds the operator-selected Logs backend and
@@ -215,6 +218,41 @@ func registerAlertsConcept(d *dispatcher.Dispatcher, logger *slog.Logger) error 
 	)
 	if err := d.Register(alerts.NewConceptProvider(chosen.impl, chosen.name, logger)); err != nil {
 		return fmt.Errorf("register alerts concept provider: %w", err)
+	}
+	return nil
+}
+
+// registerDeployHealth registers check_deploy_health when its three
+// concepts are available: a Kubernetes DeploymentSource (the only one
+// so far, so the orchestration backend must be kubernetes too — the
+// instances it reads come from the same cluster) and a metrics backend.
+// Thresholds and query templates can be overridden per service with the
+// YAML file named by RIKUGAN_HEALTH_CONFIG.
+func registerDeployHealth(d *dispatcher.Dispatcher, k8sClient kubernetes.Interface, orch provider.OrchestrationProvider, metricsProvider provider.MetricsProvider, logger *slog.Logger) error {
+	if metricsProvider == nil || k8sClient == nil {
+		logger.Warn("check_deploy_health not available, skipping",
+			slog.String("reason", "needs a metrics backend and a kubernetes cluster"),
+		)
+		return nil
+	}
+	if _, ok := orch.(*orchk8s.Provider); !ok {
+		logger.Warn("check_deploy_health not available, skipping",
+			slog.String("reason", "rollout detection is kubernetes-only for now; ORCHESTRATION_PROVIDER is not kubernetes"),
+		)
+		return nil
+	}
+	settings, err := health.LoadSettings(os.Getenv("RIKUGAN_HEALTH_CONFIG"))
+	if err != nil {
+		return err
+	}
+	collector := &health.Collector{
+		Metrics:       metricsProvider,
+		Orchestration: orch,
+		Deployments:   deployk8s.New(k8sClient, logger),
+		Settings:      settings.For,
+	}
+	if err := d.Register(deployhealth.New(collector, logger)); err != nil {
+		return fmt.Errorf("register deploy health provider: %w", err)
 	}
 	return nil
 }
