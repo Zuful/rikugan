@@ -2,6 +2,7 @@ package restclient
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -240,5 +241,85 @@ func TestJoinURL(t *testing.T) {
 				t.Errorf("JoinURL() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestPostJSON_SendsBodyAndDecodesResponse(t *testing.T) {
+	t.Parallel()
+	var method, contentType, body string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method = r.Method
+		contentType = r.Header.Get("Content-Type")
+		raw, _ := io.ReadAll(r.Body)
+		body = string(raw)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	var got struct {
+		OK bool `json:"ok"`
+	}
+	err := New("test").PostJSON(context.Background(), srv.URL, map[string]string{"text": "hi"}, &got)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if method != http.MethodPost || contentType != "application/json" || body != `{"text":"hi"}` {
+		t.Errorf("sent %s %q %s, want POST application/json {\"text\":\"hi\"}", method, contentType, body)
+	}
+	if !got.OK {
+		t.Error("response not decoded")
+	}
+}
+
+func TestPostJSON_NilDestinationSkipsDecoding(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`ok`)) // Slack webhooks answer plain text
+	}))
+	defer srv.Close()
+
+	if err := New("test").PostJSON(context.Background(), srv.URL, struct{}{}, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestPostJSON_RejectsNon2xxWithBody(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`chat not found`))
+	}))
+	defer srv.Close()
+
+	err := New("test").PostJSON(context.Background(), srv.URL, struct{}{}, nil)
+	if err == nil || !strings.Contains(err.Error(), "400") || !strings.Contains(err.Error(), "chat not found") {
+		t.Fatalf("got %v, want an error carrying the status and body", err)
+	}
+}
+
+func TestWithSecretURL_KeepsTheURLOutOfErrors(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	secret := srv.URL + "/botSECRET-TOKEN/sendMessage"
+	srv.Close() // connection refused from here on
+
+	for name, c := range map[string]*Client{
+		"plain":  New("test"),
+		"secret": New("test", WithSecretURL()),
+	} {
+		err := c.PostJSON(context.Background(), secret, struct{}{}, nil)
+		if err == nil {
+			t.Fatalf("%s: expected a transport error", name)
+		}
+		leaked := strings.Contains(err.Error(), "SECRET-TOKEN")
+		if leaked != (name == "plain") {
+			t.Errorf("%s: error %q, leaked=%v", name, err, leaked)
+		}
+	}
+
+	err := New("test", WithSecretURL()).PostJSON(context.Background(), "http://h/\x7fSECRET-TOKEN", struct{}{}, nil)
+	if err == nil || strings.Contains(err.Error(), "SECRET-TOKEN") {
+		t.Errorf("invalid secret URL: got %v, want an error without the URL", err)
 	}
 }

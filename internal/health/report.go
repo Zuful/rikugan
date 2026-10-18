@@ -20,6 +20,21 @@ const (
 	StatusNotEvaluated Status = "not_evaluated"
 )
 
+// Severity is the severity of the team notification a verdict warrants
+// (design §5): degraded is critical, investigate a warning, anything else
+// informational. The mapping lives here, with the verdicts, because the
+// communication concept knows nothing of them.
+func (s Status) Severity() provider.Severity {
+	switch s {
+	case StatusDegraded:
+		return provider.SeverityCritical
+	case StatusInvestigate:
+		return provider.SeverityWarning
+	default:
+		return provider.SeverityInfo
+	}
+}
+
 // Verdict is the overall result of a check. It reuses the four
 // evaluable statuses.
 type Verdict = Status

@@ -51,6 +51,8 @@ The full list of concepts Rikugan models, with priorities and planned backends, 
 | Logs | `GetLogs` / `TailLogs` / `SearchLogs` | loki |
 | Metrics | `GetMetric` / `CompareToBaseline` / `ListAvailableMetrics` | prometheus |
 | Alerts | `ListActiveAlerts` / `GetAlertDetails` | alertmanager, sentry, pagerduty (one selected as primary via `ALERTS_PROVIDER`; others register their backend-specific extras only) |
+| Deployments | `LastRollout` | kubernetes |
+| Communication | `PostMessage` | telegram, slack — every configured channel receives the proactive mode's notifications; no MCP tool, messages leave from the daemon |
 
 Three concepts ship tools without a concept interface yet (the interface lands once a second backend exists to keep the abstraction honest):
 
@@ -577,6 +579,9 @@ You can also wire one entry per per-concept binary if you prefer to keep them is
 | `ARGOCD_TOKEN`              | Argo CD API bearer token                                      | When argocd tools are wired |
 | `JAEGER_URL`                | Jaeger Query API URL                                          | When jaeger tools are wired |
 | `FALCO_URL`                 | Falcosidekick URL                                             | When falco tools are wired |
+| `TELEGRAM_BOT_TOKEN`        | Telegram bot token (from @BotFather)                          | For proactive-mode notifications to Telegram (read by `rikugan serve`, in progress) |
+| `TELEGRAM_CHAT_ID`          | Chat or channel the bot posts to                              | With `TELEGRAM_BOT_TOKEN` |
+| `SLACK_WEBHOOK_URL`         | Slack incoming-webhook URL (https)                            | For proactive-mode notifications to Slack (read by `rikugan serve`, in progress) |
 | `RIKUGAN_LOG_LEVEL`         | Log verbosity: `debug` / `info` / `warn` / `error`            | No (defaults to `info`) |
 
 > **Graceful by design.** Missing config = skipped backend. Rikugan logs which providers were activated and which were skipped at startup, so you always know what's available.
