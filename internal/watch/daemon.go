@@ -65,6 +65,9 @@ type Daemon struct {
 	Settings func(provider.Service) health.Config
 	// Checkpoints defaults to health.Checkpoints.
 	Checkpoints []time.Duration
+	// Notifier, when set, applies the noise policy to each check and
+	// sends what it decides.
+	Notifier *Notifier
 	// OnCheck, when set, is called after each check is recorded.
 	OnCheck func(context.Context, Check)
 	// Verdicts, when set, receives one structured line per check: the
@@ -87,6 +90,7 @@ type rolloutState struct {
 	checked  map[time.Duration]bool
 	skipped  map[time.Duration]bool
 	retryAt  time.Time
+	notify   notifyState
 }
 
 // Payloads of the journal records. They are the journal's own format,
@@ -126,6 +130,16 @@ type (
 		Sequence   string `json:"sequence"`
 		Checkpoint string `json:"checkpoint"`
 		Reason     string `json:"reason"`
+	}
+	notificationRecord struct {
+		Sequence   string `json:"sequence"`
+		Checkpoint string `json:"checkpoint"`
+		Event      string `json:"event"`
+		Severity   string `json:"severity"`
+		Title      string `json:"title"`
+		// Delivered lists the channels that took the message.
+		Delivered []string    `json:"delivered,omitempty"`
+		State     notifyState `json:"state"`
 	}
 )
 
@@ -242,6 +256,14 @@ func (d *Daemon) Replay() error {
 			if json.Unmarshal(rec.Data, &rr) == nil {
 				r := rr.rollout()
 				d.rolloutState(r).apply(r)
+			}
+		case KindNotification:
+			var n notificationRecord
+			if json.Unmarshal(rec.Data, &n) != nil {
+				return nil
+			}
+			if st := d.services[rec.Service]; st != nil && st.rollouts[n.Sequence] != nil {
+				st.rollouts[n.Sequence].notify = n.State
 			}
 		case KindCheck, KindSkip:
 			var c skipRecord // shares the sequence and checkpoint fields
@@ -434,10 +456,32 @@ func (d *Daemon) check(ctx context.Context, rs *rolloutState, cp time.Duration, 
 			slog.String("revision", r.Sequence), slog.Duration("checkpoint", cp), slog.String("error", err.Error()))
 		return nil
 	}
+	c := Check{Rollout: r, Checkpoint: cp, Late: late, Report: report}
+
+	// Send before recording the check: a crash in between then repeats
+	// the check and may send twice, rather than recording a check whose
+	// critical was never sent.
+	var note *notificationRecord
+	if d.Notifier != nil && report.Outcome == health.OutcomeEvaluated {
+		next, dec := decide(rs.notify, report.Verdict, d.Notifier.NotifyOnOK)
+		if dec != nil {
+			msg := d.Notifier.message(ctx, c, *dec)
+			note = &notificationRecord{
+				Sequence: r.Sequence, Checkpoint: cp.String(), Event: dec.Event, Severity: string(dec.Severity),
+				Title: msg.Title, Delivered: d.Notifier.Send(ctx, msg), State: next,
+			}
+		}
+	}
 	if err := d.append(KindCheck, r.Service, toCheckRecord(r, cp, late, report)); err != nil {
 		return err
 	}
 	rs.checked[cp] = true
+	if note != nil {
+		if err := d.append(KindNotification, r.Service, note); err != nil {
+			return err
+		}
+		rs.notify = note.State
+	}
 	if d.Verdicts != nil {
 		d.Verdicts.Info("check",
 			slog.String("service", serviceKey(r.Service)), slog.String("revision", r.Sequence),
@@ -445,7 +489,7 @@ func (d *Daemon) check(ctx context.Context, rs *rolloutState, cp time.Duration, 
 			slog.String("outcome", string(report.Outcome)), slog.String("verdict", string(report.Verdict)))
 	}
 	if d.OnCheck != nil {
-		d.OnCheck(ctx, Check{Rollout: r, Checkpoint: cp, Late: late, Report: report})
+		d.OnCheck(ctx, c)
 	}
 	return nil
 }

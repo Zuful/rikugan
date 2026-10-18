@@ -521,7 +521,9 @@ RIKUGAN_SERVE_NAMESPACES=shop,payments \
   ./bin/rikugan serve
 ```
 
-It runs as a **single instance**: a lock on the state directory makes a second one refuse to start, but that lock is unreliable on network file systems, where the state directory must not live. Rollout detection is Kubernetes-only for now. Notifications, the verdicts API and packaging (Helm, Compose, systemd) are the next steps.
+It runs as a **single instance**: a lock on the state directory makes a second one refuse to start, but that lock is unreliable on network file systems, where the state directory must not live. Rollout detection is Kubernetes-only for now. The verdicts API and packaging (Helm, Compose, systemd) are the next steps.
+
+**Notifications** go to every configured channel (Telegram, Slack; see `TELEGRAM_*` and `SLACK_WEBHOOK_URL`): a degraded verdict or a failed rollout is `critical`, an investigate verdict a `warning`; OK verdicts are only sent with `RIKUGAN_NOTIFY_ON_OK=true`. Each rollout gets one notification, and a later checkpoint only notifies again when the verdict gets worse, with one exception: after a critical, the first checkpoint back below degraded sends a single "recovered" message (insufficient data never counts as recovered). When an alerts backend is configured, alerts already firing for the service are mentioned in the message.
 
 ### Docker
 
@@ -597,6 +599,7 @@ You can also wire one entry per per-concept binary if you prefer to keep them is
 | `SLACK_WEBHOOK_URL`         | Slack incoming-webhook URL (https)                            | For proactive-mode notifications to Slack (read by `rikugan serve`, in progress) |
 | `RIKUGAN_STATE_DIR`         | `rikugan serve`: journal and lock directory (local disk, not NFS) | No (defaults to `/var/lib/rikugan`) |
 | `RIKUGAN_SERVE_NAMESPACES`  | `rikugan serve`: comma-separated namespaces whose rollouts are watched | Outside a pod (in a pod, defaults to its own namespace) |
+| `RIKUGAN_NOTIFY_ON_OK`      | `rikugan serve`: also notify OK verdicts (`true`)             | No (defaults to off) |
 | `RIKUGAN_LOG_LEVEL`         | Log verbosity: `debug` / `info` / `warn` / `error`            | No (defaults to `info`) |
 
 > **Graceful by design.** Missing config = skipped backend. Rikugan logs which providers were activated and which were skipped at startup, so you always know what's available.
