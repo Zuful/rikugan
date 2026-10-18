@@ -30,13 +30,15 @@ type Outcome string
 const (
 	// OutcomeEvaluated carries a verdict.
 	OutcomeEvaluated Outcome = "evaluated"
-	// OutcomeInProgress: the rollout has not completed, so there is no
-	// "after" window yet. Instance signals of the new revision are
+	// OutcomeInProgress means the rollout has not completed, so there
+	// is no "after" window yet. Instance signals of the new revision are
 	// still reported.
 	OutcomeInProgress Outcome = "in_progress"
-	// OutcomeTooEarly: completed less than the first checkpoint ago.
+	// OutcomeTooEarly means the rollout completed less than the first
+	// checkpoint ago.
 	OutcomeTooEarly Outcome = "too_early"
-	// OutcomeStale: completed longer than Config.StaleAfter ago.
+	// OutcomeStale means the rollout completed longer than
+	// Config.StaleAfter ago.
 	OutcomeStale Outcome = "stale"
 )
 
