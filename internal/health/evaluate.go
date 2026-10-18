@@ -271,9 +271,14 @@ func errorRateSignal(cfg Config, s Signals, before, after window, vol volumeChec
 	if !vol.ok {
 		return bluntErrorRule(cfg, s, after, vol, cp)
 	}
+	// Prometheus has no 5xx series at all until a first 5xx is served,
+	// so a service without errors before the rollout has no error data
+	// in the before window. With data in the other window, the missing
+	// one means no errors, not an unknown rate; otherwise the commonest
+	// regression, from zero errors, would go unevaluated.
 	eb, okB := before.count(s.ErrorRate)
 	ea, okA := after.count(s.ErrorRate)
-	if !okB || !okA {
+	if !okB && !okA {
 		res.Status, res.Reason = StatusNotEvaluated, "no error-rate data"
 		return res
 	}

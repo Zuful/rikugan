@@ -220,6 +220,22 @@ func TestEvaluate_Fixtures(t *testing.T) {
 			noteSubstr: "error_rate not evaluated: no error-rate data",
 		},
 		{
+			name: "no 5xx at all before the rollout (no 5xx series in Prometheus), 30% after",
+			in: func() Inputs {
+				s := healthy()
+				var after Series
+				for _, p := range profile(constant(perMinute(1200) * 0.30)) {
+					if !p.Time.Before(minute(0)) {
+						after = append(after, p)
+					}
+				}
+				s.ErrorRate = after
+				return inputs(s, 15)
+			},
+			verdict: StatusDegraded,
+			signals: map[string]Status{SignalErrorRate: StatusDegraded},
+		},
+		{
 			name: "real regression: 5xx 0.2% to 4%, 60 errors",
 			in: func() Inputs {
 				s := healthy()

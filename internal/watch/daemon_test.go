@@ -213,6 +213,20 @@ func TestRestartResumesWithoutRepeatingAndSkipsMissedCheckpoints(t *testing.T) {
 	}
 }
 
+func TestCheckpointsDueTogetherBothRun(t *testing.T) {
+	// The loop was busy and two checkpoints fell due within a minute of
+	// each other: that is not downtime, both run.
+	h := newHarness(t)
+	h.d.Checkpoints = []time.Duration{5 * time.Minute, 5*time.Minute + 30*time.Second}
+	r := completed("2", 0, time.Minute)
+	h.source.current = r
+	h.at(time.Minute).handle(r)
+	h.at(6*time.Minute + 40*time.Second).due()
+	if got := h.checker.seen(); got != "2@5m0s 2@5m30s" {
+		t.Errorf("checks %q", got)
+	}
+}
+
 func TestStaleRolloutIsNotChecked(t *testing.T) {
 	h := newHarness(t)
 	r := completed("2", 0, time.Minute)
