@@ -3,7 +3,6 @@ package watch
 import (
 	"crypto/subtle"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -85,9 +84,9 @@ func NewAPI(j *journal.Journal, token string, now func() time.Time) http.Handler
 			http.Error(w, "missing or invalid bearer token", http.StatusUnauthorized)
 			return
 		}
-		q, err := parseVerdictQuery(r, now())
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+		q, problem := parseVerdictQuery(r, now())
+		if problem != "" {
+			http.Error(w, problem, http.StatusBadRequest)
 			return
 		}
 		verdicts, err := readVerdicts(j, q)
@@ -112,7 +111,9 @@ type verdictQuery struct {
 	limit   int
 }
 
-func parseVerdictQuery(r *http.Request, now time.Time) (verdictQuery, error) {
+// parseVerdictQuery reads the query parameters. A bad one is reported
+// with a fixed message naming the parameter, never with an error's text.
+func parseVerdictQuery(r *http.Request, now time.Time) (verdictQuery, string) {
 	q := verdictQuery{service: r.URL.Query().Get("service"), since: now.Add(-24 * time.Hour), limit: defaultVerdictLimit}
 	if raw := r.URL.Query().Get("since"); raw != "" {
 		if d, err := time.ParseDuration(raw); err == nil && d > 0 {
@@ -120,17 +121,17 @@ func parseVerdictQuery(r *http.Request, now time.Time) (verdictQuery, error) {
 		} else if t, err := time.Parse(time.RFC3339, raw); err == nil {
 			q.since = t
 		} else {
-			return q, errors.New("since: want an RFC 3339 time or a duration such as 6h")
+			return q, "since: want an RFC 3339 time or a duration such as 6h"
 		}
 	}
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		n, err := strconv.Atoi(raw)
 		if err != nil || n <= 0 {
-			return q, errors.New("limit: want a positive integer")
+			return q, "limit: want a positive integer"
 		}
 		q.limit = min(n, maxVerdictLimit)
 	}
-	return q, nil
+	return q, ""
 }
 
 func (q verdictQuery) matches(service string) bool {
