@@ -2,6 +2,7 @@ package kubernetes
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
@@ -11,6 +12,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
+
+	"github.com/Zuful/rikugan/pkg/provider"
 )
 
 // These tests pin the reconstruction logic against hand-built cluster
@@ -28,6 +31,9 @@ func fixtureDeployment(revision string, replicas, available int32, conds ...apps
 		Spec: appsv1.DeploymentSpec{
 			Replicas: &replicas,
 			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "api"}},
+			Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+				Containers: []corev1.Container{{Name: "app", Image: "api:1"}},
+			}},
 		},
 		Status: appsv1.DeploymentStatus{
 			ObservedGeneration: 4,
@@ -73,11 +79,23 @@ func available(at time.Time) appsv1.DeploymentCondition {
 	}
 }
 
-func TestCurrentRollout(t *testing.T) {
+func stalled(at time.Time) appsv1.DeploymentCondition {
+	return appsv1.DeploymentCondition{
+		Type: appsv1.DeploymentProgressing, Status: corev1.ConditionFalse,
+		Reason: reasonProgressDeadlineExceeded, Message: `ReplicaSet "api-new" has timed out progressing.`,
+		LastUpdateTime: metav1.NewTime(at),
+	}
+}
+
+func svc() provider.Service {
+	return provider.Service{Name: "api", Namespace: "prod", Kind: "deployment"}
+}
+
+func TestLastRollout(t *testing.T) {
 	tests := []struct {
 		name    string
 		objects func() []runtime.Object
-		want    rolloutState
+		want    provider.Rollout
 	}{
 		{
 			name: "completed rollout to a new replicaset",
@@ -89,7 +107,7 @@ func TestCurrentRollout(t *testing.T) {
 					fixtureReplicaSet(dep, "new", "2", t0, ""),
 				}
 			},
-			want: rolloutState{Revision: "2", TemplateKey: "new", Complete: true, StartedAt: t0, CompletedAt: t0.Add(90 * time.Second)},
+			want: provider.Rollout{Revision: "new", Sequence: "2", State: provider.RolloutComplete, StartedAt: t0, CompletedAt: t0.Add(90 * time.Second)},
 		},
 		{
 			name: "rollout in progress has no completion time",
@@ -97,7 +115,18 @@ func TestCurrentRollout(t *testing.T) {
 				dep := fixtureDeployment("2", 3, 1)
 				return []runtime.Object{dep, fixtureReplicaSet(dep, "new", "2", t0, "")}
 			},
-			want: rolloutState{Revision: "2", TemplateKey: "new", StartedAt: t0},
+			want: provider.Rollout{Revision: "new", Sequence: "2", State: provider.RolloutInProgress, StartedAt: t0},
+		},
+		{
+			name: "stalled rollout past its progress deadline is failed",
+			objects: func() []runtime.Object {
+				dep := fixtureDeployment("2", 3, 1, stalled(t0.Add(10*time.Minute)))
+				return []runtime.Object{dep, fixtureReplicaSet(dep, "new", "2", t0, "")}
+			},
+			want: provider.Rollout{
+				Revision: "new", Sequence: "2", State: provider.RolloutFailed, StartedAt: t0,
+				FailedAt: t0.Add(10 * time.Minute), FailureReason: `ProgressDeadlineExceeded: ReplicaSet "api-new" has timed out progressing.`,
+			},
 		},
 		{
 			name: "rollback reuses an old replicaset and starts at its newest pods",
@@ -111,30 +140,32 @@ func TestCurrentRollout(t *testing.T) {
 					fixturePod("api-first-a", "first", t0.Add(5*time.Second)),
 				}
 			},
-			want: rolloutState{Revision: "3", TemplateKey: "first", Complete: true, Rollback: true, StartedAt: t0.Add(5 * time.Second), CompletedAt: t0.Add(70 * time.Second)},
+			want: provider.Rollout{Revision: "first", Sequence: "3", Rollback: true, State: provider.RolloutComplete, StartedAt: t0.Add(5 * time.Second), CompletedAt: t0.Add(70 * time.Second)},
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			cs := fake.NewClientset(tc.objects()...)
-			got, err := currentRollout(context.Background(), cs, "prod", "api")
+			p := New(fake.NewClientset(tc.objects()...), nil)
+			got, err := p.LastRollout(context.Background(), svc())
 			if err != nil {
-				t.Fatalf("currentRollout: %v", err)
+				t.Fatalf("LastRollout: %v", err)
 			}
-			if got != tc.want {
+			tc.want.Service = svc()
+			tc.want.Images = []string{"api:1"}
+			if !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("got  %+v\nwant %+v", got, tc.want)
 			}
 		})
 	}
 }
 
-func TestCurrentRollout_IgnoresReplicaSetsOwnedByAnotherDeployment(t *testing.T) {
+func TestLastRollout_IgnoresReplicaSetsOwnedByAnotherDeployment(t *testing.T) {
 	dep := fixtureDeployment("2", 1, 1, available(t0))
 	other := fixtureDeployment("2", 1, 1)
 	other.Name, other.UID = "api-canary", "other-uid"
-	cs := fake.NewClientset(dep, fixtureReplicaSet(other, "canary", "2", t0, ""))
+	p := New(fake.NewClientset(dep, fixtureReplicaSet(other, "canary", "2", t0, "")), nil)
 
-	if _, err := currentRollout(context.Background(), cs, "prod", "api"); err == nil {
+	if _, err := p.LastRollout(context.Background(), svc()); err == nil {
 		t.Fatal("expected an error: the only revision-2 replicaset belongs to another deployment")
 	}
 }

@@ -1,44 +1,63 @@
 // Package kubernetes is the Kubernetes-backed slice of the deployments
 // concept: it reconstructs a Deployment's current rollout (which revision
-// is serving, when its rollout started and when it completed) from
-// cluster state alone, so a caller can anchor before/after comparison
-// windows on the rollout rather than on "now".
+// is serving or being rolled out, when the rollout started, and whether
+// and when it completed or failed) from cluster state alone, so a caller
+// can anchor before/after comparison windows on the rollout rather than
+// on "now".
 package kubernetes
 
 import (
 	"context"
 	"fmt"
-	"time"
+	"log/slog"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
+
+	"github.com/Zuful/rikugan/pkg/provider"
 )
 
-// Annotations and labels the Deployment controller maintains. They are
-// part of the controller's observable contract (kubectl rollout relies
-// on them), not internal details.
+// Compile-time check that *Provider satisfies provider.DeploymentSource.
+var _ provider.DeploymentSource = (*Provider)(nil)
+
+// Annotations, labels and condition reasons the Deployment controller
+// maintains. They are part of the controller's observable contract
+// (kubectl rollout relies on them), not internal details.
 const (
 	annotationRevision        = "deployment.kubernetes.io/revision"
 	annotationRevisionHistory = "deployment.kubernetes.io/revision-history"
 	labelPodTemplateHash      = "pod-template-hash"
 
-	reasonNewReplicaSetAvailable = "NewReplicaSetAvailable"
+	reasonNewReplicaSetAvailable   = "NewReplicaSetAvailable"
+	reasonProgressDeadlineExceeded = "ProgressDeadlineExceeded"
 )
 
-// rolloutState is a Deployment's current rollout as reconstructed from
-// the Deployment, its ReplicaSets and the new ReplicaSet's pods.
-type rolloutState struct {
-	Revision    string
-	TemplateKey string // pod-template-hash of the new ReplicaSet
-	Complete    bool
-	Rollback    bool
-	StartedAt   time.Time
-	CompletedAt time.Time // zero while the rollout is in progress
+// Provider is the Kubernetes DeploymentSource. It registers no MCP tool
+// of its own: its rollouts feed the health checks of the correlation
+// concept.
+type Provider struct {
+	client kubernetes.Interface
+	logger *slog.Logger
 }
 
-// currentRollout reconstructs the rollout of the named Deployment.
+// New builds a Provider on an existing clientset.
+func New(client kubernetes.Interface, logger *slog.Logger) *Provider {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &Provider{client: client, logger: logger}
+}
+
+// Name implements provider.Provider.
+func (p *Provider) Name() string { return "deployments/kubernetes" }
+
+// Tools implements provider.Provider.
+func (p *Provider) Tools() []provider.ToolDefinition { return nil }
+
+// LastRollout returns the rollout of the Deployment named by svc.
 //
 // The new ReplicaSet is the owned ReplicaSet whose revision annotation
 // matches the Deployment's. StartedAt is that ReplicaSet's creation
@@ -48,50 +67,67 @@ type rolloutState struct {
 // original deploy and the earliest of its current pods is used instead.
 //
 // CompletedAt is the lastUpdateTime of the Progressing condition once
-// its reason is NewReplicaSetAvailable. Whether that timestamp stays put
-// across scales and pod replacements is exactly what
-// rollout_integration_test.go checks against a real controller.
-func currentRollout(ctx context.Context, cs kubernetes.Interface, namespace, name string) (rolloutState, error) {
-	dep, err := cs.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
+// its reason is NewReplicaSetAvailable and the rollout is complete; the
+// kind test in rollout_integration_test.go showed it does not move on
+// scales, pod replacements or metadata patches. A Progressing condition
+// with status False and reason ProgressDeadlineExceeded marks the
+// rollout failed: the controller has given up waiting for the new
+// ReplicaSet to become available.
+func (p *Provider) LastRollout(ctx context.Context, svc provider.Service) (provider.Rollout, error) {
+	dep, err := p.client.AppsV1().Deployments(svc.Namespace).Get(ctx, svc.Name, metav1.GetOptions{})
 	if err != nil {
-		return rolloutState{}, fmt.Errorf("get deployment %s/%s: %w", namespace, name, err)
+		return provider.Rollout{}, fmt.Errorf("get deployment %s/%s: %w", svc.Namespace, svc.Name, err)
 	}
-	revision := dep.Annotations[annotationRevision]
-	if revision == "" {
-		return rolloutState{}, fmt.Errorf("deployment %s/%s has no %s annotation yet", namespace, name, annotationRevision)
+	sequence := dep.Annotations[annotationRevision]
+	if sequence == "" {
+		return provider.Rollout{}, fmt.Errorf("deployment %s/%s has no %s annotation yet", svc.Namespace, svc.Name, annotationRevision)
 	}
 
-	newRS, err := findNewReplicaSet(ctx, cs, dep, revision)
+	newRS, err := p.findNewReplicaSet(ctx, dep, sequence)
 	if err != nil {
-		return rolloutState{}, err
+		return provider.Rollout{}, err
 	}
 
-	st := rolloutState{
-		Revision:    revision,
-		TemplateKey: newRS.Labels[labelPodTemplateHash],
-		Rollback:    newRS.Annotations[annotationRevisionHistory] != "",
-		StartedAt:   newRS.CreationTimestamp.Time,
-		Complete:    rolloutComplete(dep),
+	r := provider.Rollout{
+		Service:   svc,
+		Revision:  newRS.Labels[labelPodTemplateHash],
+		Sequence:  sequence,
+		Images:    templateImages(dep),
+		Rollback:  newRS.Annotations[annotationRevisionHistory] != "",
+		State:     provider.RolloutInProgress,
+		StartedAt: newRS.CreationTimestamp.Time,
 	}
 
-	if st.Rollback {
-		earliest, err := earliestPodCreation(ctx, cs, namespace, st.TemplateKey)
+	if r.Rollback {
+		earliest, err := p.earliestPodCreation(ctx, dep.Namespace, r.Revision)
 		if err != nil {
-			return rolloutState{}, err
+			return provider.Rollout{}, err
 		}
 		if !earliest.IsZero() {
-			st.StartedAt = earliest
+			r.StartedAt = earliest.Time
 		}
 	}
 
-	if st.Complete {
-		for _, c := range dep.Status.Conditions {
-			if c.Type == appsv1.DeploymentProgressing && c.Reason == reasonNewReplicaSetAvailable {
-				st.CompletedAt = c.LastUpdateTime.Time
-			}
+	progressing := progressingCondition(dep)
+	switch {
+	case rolloutComplete(dep) && progressing != nil && progressing.Reason == reasonNewReplicaSetAvailable:
+		r.State = provider.RolloutComplete
+		r.CompletedAt = progressing.LastUpdateTime.Time
+	case progressing != nil && progressing.Status == corev1.ConditionFalse && progressing.Reason == reasonProgressDeadlineExceeded:
+		r.State = provider.RolloutFailed
+		r.FailedAt = progressing.LastUpdateTime.Time
+		r.FailureReason = progressing.Reason + ": " + progressing.Message
+	}
+	return r, nil
+}
+
+func progressingCondition(dep *appsv1.Deployment) *appsv1.DeploymentCondition {
+	for i := range dep.Status.Conditions {
+		if dep.Status.Conditions[i].Type == appsv1.DeploymentProgressing {
+			return &dep.Status.Conditions[i]
 		}
 	}
-	return st, nil
+	return nil
 }
 
 // rolloutComplete mirrors the condition kubectl rollout status waits for:
@@ -109,12 +145,20 @@ func rolloutComplete(dep *appsv1.Deployment) bool {
 		s.Replicas == want
 }
 
-func findNewReplicaSet(ctx context.Context, cs kubernetes.Interface, dep *appsv1.Deployment, revision string) (*appsv1.ReplicaSet, error) {
+func templateImages(dep *appsv1.Deployment) []string {
+	var images []string
+	for _, c := range dep.Spec.Template.Spec.Containers {
+		images = append(images, c.Image)
+	}
+	return images
+}
+
+func (p *Provider) findNewReplicaSet(ctx context.Context, dep *appsv1.Deployment, revision string) (*appsv1.ReplicaSet, error) {
 	sel, err := metav1.LabelSelectorAsSelector(dep.Spec.Selector)
 	if err != nil {
 		return nil, fmt.Errorf("deployment %s/%s selector: %w", dep.Namespace, dep.Name, err)
 	}
-	list, err := cs.AppsV1().ReplicaSets(dep.Namespace).List(ctx, metav1.ListOptions{LabelSelector: sel.String()})
+	list, err := p.client.AppsV1().ReplicaSets(dep.Namespace).List(ctx, metav1.ListOptions{LabelSelector: sel.String()})
 	if err != nil {
 		return nil, fmt.Errorf("list replicasets for %s/%s: %w", dep.Namespace, dep.Name, err)
 	}
@@ -130,20 +174,18 @@ func findNewReplicaSet(ctx context.Context, cs kubernetes.Interface, dep *appsv1
 	return nil, fmt.Errorf("no replicaset of %s/%s carries revision %s", dep.Namespace, dep.Name, revision)
 }
 
-func earliestPodCreation(ctx context.Context, cs kubernetes.Interface, namespace, templateKey string) (time.Time, error) {
+func (p *Provider) earliestPodCreation(ctx context.Context, namespace, templateKey string) (earliest metav1.Time, err error) {
 	sel := labels.SelectorFromSet(labels.Set{labelPodTemplateHash: templateKey})
-	pods, err := cs.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: sel.String()})
+	pods, err := p.client.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: sel.String()})
 	if err != nil {
-		return time.Time{}, fmt.Errorf("list pods for template %s: %w", templateKey, err)
+		return metav1.Time{}, fmt.Errorf("list pods for template %s: %w", templateKey, err)
 	}
-	var earliest time.Time
-	for _, p := range pods.Items {
-		if p.DeletionTimestamp != nil {
+	for _, pod := range pods.Items {
+		if pod.DeletionTimestamp != nil {
 			continue
 		}
-		t := p.CreationTimestamp.Time
-		if earliest.IsZero() || t.Before(earliest) {
-			earliest = t
+		if earliest.IsZero() || pod.CreationTimestamp.Before(&earliest) {
+			earliest = pod.CreationTimestamp
 		}
 	}
 	return earliest, nil
