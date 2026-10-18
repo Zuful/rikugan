@@ -65,19 +65,21 @@ func run(ctx context.Context, namespace string, period time.Duration) error {
 	to := time.Now().Truncate(time.Minute)
 	from := to.Add(-period)
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintf(w, "SERVICE\tMIN REQUESTS\tDATA\t+5\t+15\t+30\n")
+	// Writes go to a tabwriter buffer and cannot fail; Flush reports
+	// any error from stdout.
+	_, _ = fmt.Fprintf(w, "SERVICE\tMIN REQUESTS\tDATA\t+5\t+15\t+30\n")
 	for _, svc := range services {
 		cfg, tpl := settings.For(svc)
 		res, err := health.Survey(ctx, metrics, cfg, tpl, svc, from, to)
 		if err != nil {
-			fmt.Fprintf(w, "%s\t%.0f\terror: %v\t\t\t\n", svc.Name, cfg.MinRequests, err)
+			_, _ = fmt.Fprintf(w, "%s\t%.0f\terror: %v\t\t\t\n", svc.Name, cfg.MinRequests, err)
 			continue
 		}
-		fmt.Fprintf(w, "%s\t%.0f\t%s\t%s\t%s\t%s\n", svc.Name, res.MinRequests,
+		_, _ = fmt.Fprintf(w, "%s\t%.0f\t%s\t%s\t%s\t%s\n", svc.Name, res.MinRequests,
 			(time.Duration(res.Minutes) * time.Minute).String(),
 			pct(res.Insufficient[5*time.Minute]), pct(res.Insufficient[15*time.Minute]), pct(res.Insufficient[30*time.Minute]))
 	}
-	fmt.Fprintf(w, "\nShare of windows below the minimum, i.e. how often latency and error rate would be \"insufficient data\" at each checkpoint.\n")
+	_, _ = fmt.Fprintf(w, "\nShare of windows below the minimum, i.e. how often latency and error rate would be \"insufficient data\" at each checkpoint.\n")
 	return w.Flush()
 }
 

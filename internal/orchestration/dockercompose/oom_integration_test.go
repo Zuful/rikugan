@@ -15,6 +15,7 @@ package dockercompose
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -39,16 +40,27 @@ const oomCompose = `services:
     command: ["sh", "-c", "if [ -f /oomed ]; then exec sleep 3600; fi; touch /oomed; dd if=/dev/zero of=/dev/null bs=128M count=1"]
 `
 
+// The oom and die events of a run are not ordered by Docker, and the
+// first versions of this test passed twice before a run logged them the
+// other way round. The scenario is therefore repeated to give the race
+// a chance to show up in every CI run.
+const oomRuns = 5
+
 func TestIntegration_OOMKilledAfterRestart(t *testing.T) {
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker not available")
 	}
+	for i := 0; i < oomRuns; i++ {
+		t.Run(fmt.Sprintf("run %d", i+1), func(t *testing.T) { oomScenario(t, fmt.Sprintf("rikugan-oom-probe-%d", i+1)) })
+	}
+}
+
+func oomScenario(t *testing.T, project string) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte(oomCompose), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	const project = "rikugan-oom-probe"
 	compose := func(args ...string) {
 		t.Helper()
 		cmd := exec.CommandContext(ctx, "docker", append([]string{"compose", "-p", project, "-f", filepath.Join(dir, "compose.yaml")}, args...)...)
@@ -80,6 +92,7 @@ func TestIntegration_OOMKilledAfterRestart(t *testing.T) {
 
 	raw := rawState(ctx, t, project)
 	t.Logf("docker inspect State after restart: %s", raw)
+	t.Logf("docker events: %s", rawEvents(ctx, t, project))
 	t.Logf("instance: %+v", inst)
 
 	if len(inst.Terminations) != 1 {
@@ -108,4 +121,16 @@ func rawState(ctx context.Context, t *testing.T, project string) string {
 		return string(b)
 	}
 	return string(out)
+}
+
+func rawEvents(ctx context.Context, t *testing.T, project string) string {
+	t.Helper()
+	out, err := exec.CommandContext(ctx, "docker", "events", "--since", "10m", "--until", "0s",
+		"--filter", "label=com.docker.compose.project="+project,
+		"--filter", "event=die", "--filter", "event=oom",
+		"--format", "{{.Action}}@{{.TimeNano}}").Output()
+	if err != nil {
+		return "error: " + err.Error()
+	}
+	return strings.Join(strings.Fields(string(out)), " ")
 }

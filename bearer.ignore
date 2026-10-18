@@ -4,5 +4,11 @@
     "comment": "execRunner.Run: name is the literal \"docker\" at every call site and exec.CommandContext never invokes a shell, so argv entries cannot be reinterpreted as commands. The residual argument-injection risk (a name read as a flag) is closed by validateComposeName, which rejects any project or service name not matching ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ before it reaches this call. See the matching #nosec G204 in dockercompose.go.",
     "false_positive": true,
     "ignored_at": "2026-09-25T18:09:11Z"
+  },
+  "6185ed238ac9431ee9fa50d1c44c493d_0": {
+    "author": "Zuful",
+    "comment": "health.LoadSettings: the path comes from RIKUGAN_HEALTH_CONFIG, set by the operator who runs rikugan, with the same trust as KUBECONFIG or PROMETHEUS_URL. No MCP request or remote input reaches it, and the file is only parsed as YAML into a typed struct with unknown keys rejected. See the matching #nosec G304 in settings.go.",
+    "false_positive": true,
+    "ignored_at": "2026-10-18T14:05:00Z"
   }
 }

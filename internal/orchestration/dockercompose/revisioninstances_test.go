@@ -75,18 +75,25 @@ func dieEvent(code int) string {
 	return fmt.Sprintf(`{"Type":"container","Action":"die","time":1792317778,"timeNano":1792317778000000000,"Actor":{"ID":"c1","Attributes":{"exitCode":"%d"}}}`, code)
 }
 
-func TestExitsFromEvents_PairsEachOOMWithTheNextDie(t *testing.T) {
+func TestExitsFromEvents_AttributesEachOOMToTheNearestDie(t *testing.T) {
+	sec := int64(time.Second)
 	raw := strings.Join([]string{
-		`{"Action":"die","timeNano":3000,"Actor":{"Attributes":{"exitCode":"1"}}}`,
-		`{"Action":"oom","timeNano":1000}`,
-		`{"Action":"die","timeNano":2000,"Actor":{"Attributes":{"exitCode":"137"}}}`,
-		`{"Action":"die","timeNano":4000,"Actor":{"Attributes":{"exitCode":"137"}}}`,
+		// Run 1: oom logged just before its die.
+		fmt.Sprintf(`{"Action":"oom","timeNano":%d}`, 10*sec-100),
+		fmt.Sprintf(`{"Action":"die","timeNano":%d,"Actor":{"Attributes":{"exitCode":"137"}}}`, 10*sec),
+		// Run 2: plain error exit.
+		fmt.Sprintf(`{"Action":"die","timeNano":%d,"Actor":{"Attributes":{"exitCode":"1"}}}`, 30*sec),
+		// Run 3: oom logged just after its die (Docker does not order them).
+		fmt.Sprintf(`{"Action":"die","timeNano":%d,"Actor":{"Attributes":{"exitCode":"137"}}}`, 60*sec),
+		fmt.Sprintf(`{"Action":"oom","timeNano":%d}`, 60*sec+300),
+		// Run 4: SIGKILL with no oom anywhere near it.
+		fmt.Sprintf(`{"Action":"die","timeNano":%d,"Actor":{"Attributes":{"exitCode":"137"}}}`, 90*sec),
 	}, "\n")
 	got := exitsFromEvents([]byte(raw), "c")
 	want := []struct {
 		reason string
 		oom    bool
-	}{{"OOMKilled", true}, {"Error", false}, {"Killed", false}}
+	}{{"OOMKilled", true}, {"Error", false}, {"OOMKilled", true}, {"Killed", false}}
 	if len(got) != len(want) {
 		t.Fatalf("got %d terminations, want %d: %+v", len(got), len(want), got)
 	}
