@@ -409,8 +409,15 @@ func (d *Daemon) RunDue(ctx context.Context) (time.Time, error) {
 				}
 				continue
 			}
+			// An overdue checkpoint is only skipped when it is really
+			// late: two checkpoints due within lateAfter of each other
+			// (a slow check, a busy loop) both run.
 			for _, cp := range due[:len(due)-1] {
-				if err := d.skip(rs, cp, "missed while the daemon was down"); err != nil {
+				if now.Sub(r.CompletedAt.Add(cp)) > lateAfter {
+					if err := d.skip(rs, cp, "missed while the daemon was down"); err != nil {
+						return time.Time{}, err
+					}
+				} else if err := d.check(ctx, rs, cp, false); err != nil {
 					return time.Time{}, err
 				}
 			}
