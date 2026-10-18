@@ -70,6 +70,9 @@ type Thresholds struct {
 
 	UnavailableGrace        *Duration `json:"unavailable_grace"`
 	RolloutUnavailableGrace *Duration `json:"rollout_unavailable_grace"`
+
+	LeakMinIncreasePct   *float64 `json:"leak_min_increase_pct"`
+	LeakMinIncreaseBytes *float64 `json:"leak_min_increase_bytes"`
 }
 
 // Duration reads "90s"-style strings.
@@ -145,6 +148,8 @@ func (o Override) apply(cfg *Config, tpl *Templates) {
 	setNum(&cfg.TrafficZeroRatio, t.TrafficZeroRatio)
 	setDur(&cfg.UnavailableGrace, t.UnavailableGrace)
 	setDur(&cfg.RolloutUnavailableGrace, t.RolloutUnavailableGrace)
+	setNum(&cfg.LeakMinIncreasePct, t.LeakMinIncreasePct)
+	setNum(&cfg.LeakMinIncreaseBytes, t.LeakMinIncreaseBytes)
 
 	setStr(&tpl.RequestRate, o.Templates.RequestRate)
 	setStr(&tpl.ErrorRate, o.Templates.ErrorRate)

@@ -26,6 +26,8 @@ type fakeMetrics struct {
 	values []metricValue
 	labels map[string]int // number of series to return per query substring (default 1)
 	calls  []metricCall
+	// notBefore, when set, is the store's retention: nothing older.
+	notBefore time.Time
 }
 
 type metricValue struct {
@@ -35,6 +37,9 @@ type metricValue struct {
 
 func (f *fakeMetrics) GetMetric(_ context.Context, query string, start, end time.Time, step time.Duration) ([]provider.MetricSample, error) {
 	f.calls = append(f.calls, metricCall{query, start, end})
+	if !f.notBefore.IsZero() && end.Before(f.notBefore) {
+		return nil, nil
+	}
 	for _, v := range f.values {
 		key, fn := v.match, v.fn
 		if !strings.Contains(query, key) {

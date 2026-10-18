@@ -212,3 +212,76 @@ func singleSeries(samples []provider.MetricSample, offset time.Duration) (Series
 	sort.Slice(out, func(i, j int) bool { return out[i].Time.Before(out[j].Time) })
 	return out, len(keys)
 }
+
+// PreviousSweep is what a sweep keeps for the next one: when it ran and
+// each instance's restart count then.
+type PreviousSweep struct {
+	At       time.Time
+	Restarts map[string]int // by instance name
+}
+
+// CheckSweep evaluates a service for the periodic sweep and returns the
+// restart counts to keep for the next one. prev is nil for the first
+// sweep of a service.
+//
+// Restarts are counted per instance since prev (design §6): the delta
+// for an instance seen then, the whole count for an instance created
+// since, nothing for one that disappeared. Terminations are kept only
+// when they happened after prev.
+func (c *Collector) CheckSweep(ctx context.Context, svc provider.Service, prev *PreviousSweep) (Report, map[string]int, error) {
+	now := time.Now()
+	if c.Now != nil {
+		now = c.Now()
+	}
+	cfg, tpl := DefaultConfig(), DefaultTemplates()
+	if c.Settings != nil {
+		cfg, tpl = c.Settings(svc)
+	}
+
+	rollout, err := c.Deployments.LastRollout(ctx, svc)
+	if err != nil {
+		return Report{}, nil, fmt.Errorf("current revision of %s/%s: %w", svc.Namespace, svc.Name, err)
+	}
+	instances, err := c.Orchestration.GetRevisionInstances(ctx, svc, rollout.Revision)
+	if err != nil {
+		return Report{}, nil, fmt.Errorf("instances of %s/%s: %w", svc.Namespace, svc.Name, err)
+	}
+	counts := make(map[string]int, len(instances))
+	for i, inst := range instances {
+		counts[inst.Name] = inst.RestartCount
+		if prev == nil {
+			continue
+		}
+		if before, seen := prev.Restarts[inst.Name]; seen {
+			instances[i].RestartCount = max(inst.RestartCount-before, 0)
+		}
+		var recent []provider.Termination
+		for _, t := range inst.Terminations {
+			if t.Time.After(prev.At) {
+				recent = append(recent, t)
+			}
+		}
+		instances[i].Terminations = recent
+	}
+
+	vars := templateVars{Namespace: svc.Namespace, Service: svc.Name, Revision: rollout.Revision}
+	from := now.Add(-cfg.LeakSpan - 15*time.Minute)
+	current, notes := c.fetch(ctx, tpl, vars, from, now, 0)
+	var baseline *Signals
+	var age time.Duration
+	for _, offset := range []time.Duration{7 * 24 * time.Hour, 24 * time.Hour} {
+		b, _ := c.fetch(ctx, tpl, vars, now.Add(-SweepWindow), now, offset)
+		if len(b.RequestRate) > 0 {
+			baseline, age = &b, offset
+			break
+		}
+	}
+
+	r := EvaluateSweep(cfg, SweepInputs{
+		Now: now, Current: current, Baseline: baseline, BaselineAge: age,
+		Instances: instances, FirstSweep: prev == nil,
+	})
+	r.Rollout = rollout
+	r.Notes = append(r.Notes, notes...)
+	return r, counts, nil
+}
