@@ -35,10 +35,12 @@ func DefaultTemplates() Templates {
 	const pods = `namespace="{{.Namespace}}",pod=~"{{.Service}}-[a-z0-9]+-[a-z0-9]+",container!="",container!="POD"`
 	return Templates{
 		RequestRate: `sum(rate(http_requests_total{` + sel + `}[1m]))`,
-		ErrorRate:   `sum(rate(http_requests_total{` + sel + `,code=~"5.."}[1m]))`,
-		LatencyP95:  `histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{` + sel + `}[1m])))`,
-		CPU:         `avg(sum by (pod) (rate(container_cpu_usage_seconds_total{` + pods + `}[1m])))`,
-		Memory:      `avg(sum by (pod) (container_memory_working_set_bytes{` + pods + `}))`,
+		// "or vector(0)": without any 5xx yet, the 5xx series does not
+		// exist and the sum is empty; zero errors is what that means.
+		ErrorRate:  `sum(rate(http_requests_total{` + sel + `,code=~"5.."}[1m])) or vector(0)`,
+		LatencyP95: `histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{` + sel + `}[1m])))`,
+		CPU:        `avg(sum by (pod) (rate(container_cpu_usage_seconds_total{` + pods + `}[1m])))`,
+		Memory:     `avg(sum by (pod) (container_memory_working_set_bytes{` + pods + `}))`,
 	}
 }
 
