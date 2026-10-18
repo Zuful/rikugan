@@ -242,3 +242,23 @@ services:
 		t.Error("a misspelled key must be rejected, not silently ignored")
 	}
 }
+
+func TestCollector_CheckRolloutWithOptions(t *testing.T) {
+	// Daemon catch-up at +40 for the +15 checkpoint, after a rollout that
+	// started 10 minutes after the previous one.
+	m := busy(0.120)
+	c, _ := newCollector(m, rollout(), minute(40))
+	beforeEnd := rollout().StartedAt.Add(-10 * time.Minute)
+
+	r, err := c.CheckRollout(context.Background(), rollout(), CheckOptions{Checkpoint: 15 * time.Minute, BeforeEnd: beforeEnd})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Checkpoint != 15*time.Minute || r.Verdict != StatusOK {
+		t.Fatalf("checkpoint %s verdict %s\n%s", r.Checkpoint, r.Verdict, dump(r))
+	}
+	wantFrom, wantTo := beforeEnd.Add(-30*time.Minute), minute(15)
+	if call := m.calls[0]; !call.start.Equal(wantFrom) || !call.end.Equal(wantTo) {
+		t.Errorf("query over [%s, %s], want [%s, %s]", call.start, call.end, wantFrom, wantTo)
+	}
+}

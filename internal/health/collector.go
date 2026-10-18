@@ -60,36 +60,61 @@ const seriesStep = time.Minute
 // seasonalOffset is how far back the seasonality baseline sits.
 const seasonalOffset = 7 * 24 * time.Hour
 
-// Check evaluates the service's last rollout. Metric errors are not
-// fatal: the affected signal is reported as not evaluated and the error
-// is noted in the report, so one missing metric does not hide the
-// others.
+// Check evaluates the service's last rollout at the latest checkpoint
+// it has reached. Metric errors are not fatal: the affected signal is
+// reported as not evaluated and the error is noted in the report, so one
+// missing metric does not hide the others.
 func (c *Collector) Check(ctx context.Context, svc provider.Service) (Report, error) {
+	rollout, err := c.Deployments.LastRollout(ctx, svc)
+	if err != nil {
+		return Report{}, fmt.Errorf("last rollout of %s/%s: %w", svc.Namespace, svc.Name, err)
+	}
+	return c.CheckRollout(ctx, rollout, CheckOptions{})
+}
+
+// CheckOptions narrows what CheckRollout evaluates. The zero value
+// evaluates the latest checkpoint reached, with the usual before window.
+type CheckOptions struct {
+	// Checkpoint picks the checkpoint to evaluate (Inputs.Checkpoint).
+	Checkpoint time.Duration
+	// BeforeEnd ends the before window early (Inputs.BeforeEnd).
+	BeforeEnd time.Time
+}
+
+// CheckRollout evaluates a given rollout, as reported by a
+// DeploymentSource. The instance signals are always read as they are
+// now.
+func (c *Collector) CheckRollout(ctx context.Context, rollout provider.Rollout, opts CheckOptions) (Report, error) {
 	now := time.Now()
 	if c.Now != nil {
 		now = c.Now()
 	}
+	svc := rollout.Service
 	cfg, tpl := DefaultConfig(), DefaultTemplates()
 	if c.Settings != nil {
 		cfg, tpl = c.Settings(svc)
 	}
 
-	rollout, err := c.Deployments.LastRollout(ctx, svc)
-	if err != nil {
-		return Report{}, fmt.Errorf("last rollout of %s/%s: %w", svc.Namespace, svc.Name, err)
-	}
 	instances, err := c.Orchestration.GetRevisionInstances(ctx, svc, rollout.Revision)
 	if err != nil {
 		return Report{}, fmt.Errorf("instances of %s/%s revision %s: %w", svc.Namespace, svc.Name, rollout.Revision, err)
 	}
-	in := Inputs{Rollout: rollout, Now: now, Instances: instances}
+	in := Inputs{Rollout: rollout, Now: now, Instances: instances, Checkpoint: opts.Checkpoint, BeforeEnd: opts.BeforeEnd}
 
 	// Metrics only matter when there is a verdict to compute.
 	var notes []string
 	if rollout.State == provider.RolloutComplete {
-		if cp, outcome := SelectCheckpoint(cfg, rollout.CompletedAt, now); outcome == OutcomeEvaluated {
+		cp, outcome := SelectCheckpoint(cfg, rollout.CompletedAt, now)
+		if opts.Checkpoint > 0 && now.Sub(rollout.CompletedAt) >= opts.Checkpoint {
+			cp, outcome = opts.Checkpoint, OutcomeEvaluated
+		}
+		if outcome == OutcomeEvaluated {
 			vars := templateVars{Namespace: svc.Namespace, Service: svc.Name, Revision: rollout.Revision}
-			from := rollout.StartedAt.Add(-cfg.BeforeWindow)
+			beforeEnd := rollout.StartedAt
+			if !opts.BeforeEnd.IsZero() && opts.BeforeEnd.Before(beforeEnd) {
+				beforeEnd = opts.BeforeEnd
+			}
+			from := beforeEnd.Add(-cfg.BeforeWindow)
 			to := rollout.CompletedAt.Add(cp)
 			in.Current, notes = c.fetch(ctx, tpl, vars, from, to, 0)
 			seasonal, _ := c.fetch(ctx, Templates{RequestRate: tpl.RequestRate}, vars, from, to, seasonalOffset)
