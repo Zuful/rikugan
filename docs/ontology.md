@@ -21,7 +21,7 @@ planned but not yet on the critical path (P2).
 | 5a | Versioning — commits, diffs | `versioning` | P1 | none yet | github, gitlab | — |
 | 5b | Deployments — rollouts, deployed revisions | `deployments` | P1 | `DeploymentSource` | kubernetes | dockercompose (proactive mode phase 2), argocd (phase 3) |
 | 6 | Incidents and tickets | `incidents` | P1 | none yet | none as a concept — see below | — |
-| 7 | Team communication | `communication` | P1 | `CommunicationProvider` *(planned, proactive mode phase 2)* | none yet | telegram, slack (phase 2) |
+| 7 | Team communication | `communication` | P1 | `CommunicationProvider` | telegram, slack | GitHub commit comment (proactive mode phase 3) |
 | 8 | CI/CD | `cicd` | P2 | none yet | none | — |
 | 9 | Distributed tracing | `tracing` | P2 | none yet | jaeger | — |
 | 10 | Databases | `databases` | P2 | none yet | none | — |
@@ -143,5 +143,5 @@ was never built. Their second backends are still planned — newrelic
 set — and until then both interfaces carry the same risk of being
 shaped like their only backend.
 
-`communication` gets its interface in phase 2 with two backends
-(telegram, slack) arriving together, so it follows the rule.
+`communication` got its interface together with its two backends
+(telegram, slack), so it follows the rule.

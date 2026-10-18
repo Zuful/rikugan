@@ -12,8 +12,9 @@ import (
 // list_active_alerts, get_service_state — that route to whichever
 // provider the operator configured.
 //
-// Four concepts have a stable interface today: LogsProvider,
-// MetricsProvider, AlertsProvider, OrchestrationProvider. Backends
+// Six concepts have an interface today: LogsProvider,
+// MetricsProvider, AlertsProvider, OrchestrationProvider,
+// DeploymentSource and CommunicationProvider. Backends
 // that implement them also satisfy the base Provider (Name + Tools)
 // contract above so they can register backend-specific tools that
 // don't project into the strict-intersection interface (e.g. loki's
@@ -239,6 +240,43 @@ type DeploymentSource interface {
 	// LastRollout returns the service's current rollout: the one that
 	// produced the revision it runs or is moving to.
 	LastRollout(ctx context.Context, svc Service) (Rollout, error)
+}
+
+// Severity is how urgently a team message needs a human. It is generic
+// on purpose: the communication concept knows nothing of deploy-health
+// verdicts, whose mapping to a severity lives with the verdicts.
+type Severity string
+
+// Severities, from least to most urgent.
+const (
+	// SeverityInfo is for the record: nobody needs to act.
+	SeverityInfo Severity = "info"
+	// SeverityWarning asks someone to look when they can.
+	SeverityWarning Severity = "warning"
+	// SeverityCritical asks someone to look now.
+	SeverityCritical Severity = "critical"
+)
+
+// Link is a labelled URL attached to a team message.
+type Link struct {
+	Text string
+	URL  string
+}
+
+// TeamMessage is a message for the humans of a team. Body is plain
+// text; each provider escapes and formats it for its own channel.
+type TeamMessage struct {
+	Severity Severity
+	Title    string
+	Body     string
+	Links    []Link
+}
+
+// CommunicationProvider posts messages to a team channel (concept 7 in
+// docs/ontology.md). Its backends are telegram and slack.
+type CommunicationProvider interface {
+	Provider
+	PostMessage(ctx context.Context, msg TeamMessage) error
 }
 
 // Tracing, Security, Versioning and Correlation concepts will get their

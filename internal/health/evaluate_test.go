@@ -473,3 +473,16 @@ func dump(r Report) string {
 	}
 	return b.String()
 }
+
+func TestStatusSeverity(t *testing.T) {
+	for status, want := range map[Status]provider.Severity{
+		StatusDegraded:         provider.SeverityCritical,
+		StatusInvestigate:      provider.SeverityWarning,
+		StatusOK:               provider.SeverityInfo,
+		StatusInsufficientData: provider.SeverityInfo,
+	} {
+		if got := status.Severity(); got != want {
+			t.Errorf("%s: %s, want %s", status, got, want)
+		}
+	}
+}
