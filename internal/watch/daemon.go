@@ -113,15 +113,16 @@ type (
 		FailureReason string    `json:"failure_reason,omitempty"`
 	}
 	checkRecord struct {
-		Sequence   string         `json:"sequence"`
-		Checkpoint string         `json:"checkpoint"`
-		Late       bool           `json:"late,omitempty"`
-		Outcome    string         `json:"outcome"`
-		Verdict    string         `json:"verdict,omitempty"`
-		Signals    []signalRecord `json:"signals,omitempty"`
-		Notes      []string       `json:"notes,omitempty"`
+		Sequence   string   `json:"sequence"`
+		Checkpoint string   `json:"checkpoint"`
+		Late       bool     `json:"late,omitempty"`
+		Outcome    string   `json:"outcome"`
+		Verdict    string   `json:"verdict,omitempty"`
+		Signals    []Signal `json:"signals,omitempty"`
+		Notes      []string `json:"notes,omitempty"`
 	}
-	signalRecord struct {
+	// Signal is one signal of a recorded check.
+	Signal struct {
 		Name   string `json:"name"`
 		Status string `json:"status"`
 		Reason string `json:"reason,omitempty"`
@@ -165,7 +166,7 @@ func toCheckRecord(r provider.Rollout, cp time.Duration, late bool, rep health.R
 	rec := checkRecord{Sequence: r.Sequence, Checkpoint: cp.String(), Late: late,
 		Outcome: string(rep.Outcome), Verdict: string(rep.Verdict), Notes: rep.Notes}
 	for _, s := range rep.Signals {
-		rec.Signals = append(rec.Signals, signalRecord{Name: s.Name, Status: string(s.Status), Reason: s.Reason})
+		rec.Signals = append(rec.Signals, Signal{Name: s.Name, Status: string(s.Status), Reason: s.Reason})
 	}
 	return rec
 }
