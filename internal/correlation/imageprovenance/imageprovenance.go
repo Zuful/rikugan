@@ -1,12 +1,13 @@
-// Package kubernetes is the Kubernetes-backed slice of the versioning
-// concept. It hosts get_image_provenance — the tool that walks a pod's
-// container image tags and flags Git SHAs so the agent can pivot from
-// "what's running" to "which commit shipped it".
+// Package imageprovenance hosts get_image_provenance — the tool that
+// walks a pod's container image tags and flags Git SHAs so the agent can
+// pivot from "what's running" to "which commit shipped it".
 //
-// It is intentionally separate from orchestration/kubernetes: this tool
-// answers a versioning question (what code is deployed?) rather than an
-// orchestration question (what is the runtime state?).
-package kubernetes
+// It is a correlation tool (docs/ontology.md): it reads deployment state
+// (concept 5b, deployments) and answers in versioning terms (concept 5a),
+// bridging the two rather than belonging to either. It reads the cluster
+// directly for now; routing it through the deployments concept is part
+// of the same follow-up as runes.
+package imageprovenance
 
 import (
 	"log/slog"
@@ -50,12 +51,12 @@ func NewFromClient(client kubernetes.Interface, opts ...Option) *Provider {
 	}
 	return &Provider{
 		client: client,
-		logger: o.logger.With(slog.String("provider", "versioning/kubernetes")),
+		logger: o.logger.With(slog.String("provider", "correlation/image-provenance")),
 	}
 }
 
 // Name returns the provider identifier.
-func (p *Provider) Name() string { return "versioning/kubernetes" }
+func (p *Provider) Name() string { return "correlation/image-provenance" }
 
 // Tools returns the MCP tools this provider exposes.
 func (p *Provider) Tools() []provider.ToolDefinition {

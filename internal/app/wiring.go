@@ -26,8 +26,8 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/Zuful/rikugan/internal/correlation/imageprovenance"
 	"github.com/Zuful/rikugan/internal/correlation/runes"
-	versk8s "github.com/Zuful/rikugan/internal/versioning/kubernetes"
 	"github.com/Zuful/rikugan/pkg/dispatcher"
 	pkgk8s "github.com/Zuful/rikugan/pkg/kubernetes"
 	pkgmcp "github.com/Zuful/rikugan/pkg/mcp"
@@ -38,7 +38,7 @@ import (
 //
 // Provider availability is environment-driven: Kubernetes is required
 // (the cluster client is shared between orchestration/kubernetes,
-// orchestration concept, and versioning/kubernetes); every other
+// orchestration concept, and the image-provenance correlation tool); every other
 // provider degrades to warn-and-skip if its env config is missing.
 // The metrics concept and runes are coupled — runes needs both the
 // k8s client and prometheus to be present.
@@ -48,7 +48,7 @@ func Setup(logger *slog.Logger, version string) (*server.MCPServer, error) {
 
 	// ── Kubernetes is required — one client, three registrations:
 	//    orchestration concept (+ k8s-backed find_pods_by_service_name),
-	//    versioning/kubernetes (get_image_provenance), and runes (below).
+	//    get_image_provenance (correlation), and runes (below).
 	k8sClient, err := pkgk8s.BuildClient("")
 	if err != nil {
 		return nil, fmt.Errorf("build k8s client: %w", err)
@@ -57,8 +57,8 @@ func Setup(logger *slog.Logger, version string) (*server.MCPServer, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := d.Register(versk8s.NewFromClient(k8sClient, versk8s.WithLogger(logger))); err != nil {
-		return nil, fmt.Errorf("register versioning/kubernetes provider: %w", err)
+	if err := d.Register(imageprovenance.NewFromClient(k8sClient, imageprovenance.WithLogger(logger))); err != nil {
+		return nil, fmt.Errorf("register image provenance provider: %w", err)
 	}
 
 	// ── Optional providers without a concept interface yet: warn-and-skip. ─
