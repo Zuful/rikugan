@@ -91,6 +91,7 @@ func TestEvaluate_Fixtures(t *testing.T) {
 		verdict    Verdict
 		signals    map[string]Status // only the signals the fixture is about
 		noteSubstr string
+		cfg        func(*Config) // adjusts DefaultConfig, when set
 	}{
 		{
 			name:    "healthy deploy",
@@ -158,6 +159,65 @@ func TestEvaluate_Fixtures(t *testing.T) {
 			// 300 requests × 6% = 18 errors: ×12 and 6% > 5%, but 18 < 25.
 			verdict: StatusInvestigate,
 			signals: map[string]Status{SignalErrorRate: StatusInvestigate},
+		},
+		{
+			name: "medium traffic, blunt regression (5xx 30%, 15 errors) at +5: fallback A degrades",
+			in:   func() Inputs { return inputs(mediumTraffic(0.005, 0.30), 5) },
+			// 50 requests after, below the guard, but 30% > 20% and 15 ≥ 10.
+			verdict: StatusDegraded,
+			signals: map[string]Status{SignalErrorRate: StatusDegraded, SignalLatency: StatusInsufficientData},
+		},
+		{
+			name: "medium traffic, blunt regression at +5, blunt rule off (pre-v3.5 rule)",
+			in: func() Inputs {
+				return inputs(mediumTraffic(0.005, 0.30), 5)
+			},
+			cfg:     func(c *Config) { c.BluntRule = false },
+			verdict: StatusInsufficientData,
+			signals: map[string]Status{SignalErrorRate: StatusInsufficientData},
+		},
+		{
+			name: "blunt regression with too few errors (5xx 30%, 6 errors at +5): still insufficient",
+			in: func() Inputs {
+				s := healthy()
+				s.RequestRate = profile(constant(perMinute(4)))
+				s.ErrorRate = profile(step(0, perMinute(4)*0.30))
+				return inputs(s, 5)
+			},
+			verdict: StatusInsufficientData,
+			signals: map[string]Status{SignalErrorRate: StatusInsufficientData},
+		},
+		{
+			name: "low volume at the last checkpoint: the blunt rule does not apply (5xx 30%, 150 requests at +30)",
+			in: func() Inputs {
+				s := healthy()
+				s.RequestRate = profile(constant(perMinute(5)))
+				s.ErrorRate = profile(step(0, perMinute(5)*0.30))
+				return inputs(s, 30)
+			},
+			verdict: StatusInsufficientData,
+			signals: map[string]Status{SignalErrorRate: StatusInsufficientData},
+		},
+		{
+			name: "frank latency regression at +5: capped at investigate",
+			in: func() Inputs {
+				s := healthy()
+				s.LatencyP95 = profile(step(0.120, 0.450))
+				return inputs(s, 5)
+			},
+			verdict: StatusInvestigate,
+			signals: map[string]Status{SignalLatency: StatusInvestigate},
+		},
+		{
+			name: "latency evaluable, no error metric, healthy: OK, and the report says what it could not evaluate",
+			in: func() Inputs {
+				s := healthy()
+				s.ErrorRate = nil
+				return inputs(s, 15)
+			},
+			verdict:    StatusOK,
+			signals:    map[string]Status{SignalLatency: StatusOK, SignalErrorRate: StatusNotEvaluated},
+			noteSubstr: "error_rate not evaluated: no error-rate data",
 		},
 		{
 			name: "real regression: 5xx 0.2% to 4%, 60 errors",
@@ -358,7 +418,11 @@ func TestEvaluate_Fixtures(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			r := Evaluate(DefaultConfig(), tc.in())
+			cfg := DefaultConfig()
+			if tc.cfg != nil {
+				tc.cfg(&cfg)
+			}
+			r := Evaluate(cfg, tc.in())
 			if r.Outcome != OutcomeEvaluated {
 				t.Fatalf("outcome %s, want evaluated (notes %v)", r.Outcome, r.Notes)
 			}
@@ -398,9 +462,14 @@ func TestEvaluate_WarmUpAtFirstCheckpoint(t *testing.T) {
 		}
 		return 0.120
 	})
+	// Design v3.5 caps latency at "investigate" before +15 for exactly
+	// this case: in the daemon it would otherwise page as critical.
 	r := Evaluate(DefaultConfig(), inputs(s, 5))
-	if got, _ := r.Signal(SignalLatency); got.Status != StatusDegraded {
+	if got, _ := r.Signal(SignalLatency); got.Status != StatusInvestigate || !strings.Contains(got.Reason, "capped") {
 		t.Errorf("latency at +5 during warm-up: %+v", got)
+	}
+	if r.Verdict != StatusInvestigate {
+		t.Errorf("verdict at +5 during warm-up: %s", r.Verdict)
 	}
 	if got, _ := r.Signal(SignalSaturation); got.Status != StatusNotEvaluated {
 		t.Errorf("saturation must not be evaluated at +5: %+v", got)

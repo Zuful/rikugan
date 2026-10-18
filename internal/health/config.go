@@ -34,12 +34,25 @@ type Config struct {
 	LatencyInvestigateAbs time.Duration
 	LatencyDegradedPct    float64
 	LatencyDegradedAbs    time.Duration
+	// LatencyDegradedFromCheckpoint caps latency at "investigate" before
+	// this checkpoint: a slow warm-up puts the median of a 5-minute window
+	// on its spike (design v3.5).
+	LatencyDegradedFromCheckpoint time.Duration
 
 	ErrorRatio             float64 // after rate must be at least this multiple of before
 	ErrorInvestigateRate   float64
 	ErrorInvestigateMinErr float64
 	ErrorDegradedRate      float64
 	ErrorDegradedMinErr    float64
+
+	// BluntRule is fallback A of the volume guard (design v3.5): at the
+	// checkpoints before the last one, a window below MinRequests still
+	// reports a blunt error-rate regression (above BluntErrorRate with at
+	// least BluntErrorMinErr errors) as degraded. Off, such windows are
+	// only "insufficient data", the rule before v3.5.
+	BluntRule        bool
+	BluntErrorRate   float64
+	BluntErrorMinErr float64
 
 	SaturationInvestigatePct float64
 	SaturationDegradedPct    float64
@@ -53,7 +66,7 @@ type Config struct {
 	RolloutUnavailableGrace time.Duration // instances created by the rollout
 }
 
-// DefaultConfig returns the thresholds of the design (issue #4, v3.4).
+// DefaultConfig returns the thresholds of the design (issue #4, v3.5).
 func DefaultConfig() Config {
 	return Config{
 		BeforeWindow: 30 * time.Minute,
@@ -66,11 +79,17 @@ func DefaultConfig() Config {
 		LatencyDegradedPct:    1.00,
 		LatencyDegradedAbs:    200 * time.Millisecond,
 
+		LatencyDegradedFromCheckpoint: 15 * time.Minute,
+
 		ErrorRatio:             2,
 		ErrorInvestigateRate:   0.01,
 		ErrorInvestigateMinErr: 10,
 		ErrorDegradedRate:      0.05,
 		ErrorDegradedMinErr:    25,
+
+		BluntRule:        true,
+		BluntErrorRate:   0.20,
+		BluntErrorMinErr: 10,
 
 		SaturationInvestigatePct: 0.40,
 		SaturationDegradedPct:    1.00,

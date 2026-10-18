@@ -101,8 +101,8 @@ func Evaluate(cfg Config, in Inputs) Report {
 
 	volume := volumeGuard(cfg, in.Current.RequestRate, before, after)
 	r.Signals = append(r.Signals,
-		latencySignal(cfg, in.Current, before, after, volume),
-		errorRateSignal(cfg, in.Current, before, after, volume),
+		latencySignal(cfg, in.Current, before, after, volume, cp),
+		errorRateSignal(cfg, in.Current, before, after, volume, cp),
 	)
 	r.Signals = append(r.Signals, instanceSignals(cfg, in)...)
 	r.Signals = append(r.Signals, saturationSignal(cfg, in.Current, before, after, cp))
@@ -113,12 +113,22 @@ func Evaluate(cfg Config, in Inputs) Report {
 	}
 
 	r.Verdict = overall(r.Signals)
+	if r.Verdict == StatusOK {
+		// An OK needs only one of latency and error rate (design v3.5),
+		// so it never hides what it could not look at.
+		for _, s := range r.Signals {
+			if s.Status == StatusInsufficientData || s.Status == StatusNotEvaluated {
+				r.Notes = append(r.Notes, fmt.Sprintf("%s not evaluated: %s", s.Name, s.Reason))
+			}
+		}
+	}
 	return r
 }
 
 // overall is the worst evaluable status, except that the check is only
-// OK when the request-level signals could be evaluated: without latency
-// and error rate there is no ground for calling a rollout healthy.
+// OK when at least one request-level signal could be evaluated: without
+// latency nor error rate there is no ground for calling a rollout
+// healthy.
 func overall(signals []SignalResult) Verdict {
 	worst := StatusOK
 	requestLevelEvaluated := false
@@ -207,7 +217,7 @@ func volumeGuard(cfg Config, requests Series, before, after window) volumeCheck 
 	return vc
 }
 
-func latencySignal(cfg Config, s Signals, before, after window, vol volumeCheck) SignalResult {
+func latencySignal(cfg Config, s Signals, before, after window, vol volumeCheck, cp time.Duration) SignalResult {
 	res := SignalResult{Name: SignalLatency}
 	if !vol.ok {
 		res.Status, res.Reason = StatusInsufficientData, vol.reason
@@ -221,10 +231,16 @@ func latencySignal(cfg Config, s Signals, before, after window, vol volumeCheck)
 	}
 	delta := time.Duration((a - b) * float64(time.Second))
 	pct := relative(a, b)
-	res.Reason = fmt.Sprintf("p95 %s → %s (%+.0f%%, %+s)", seconds(b), seconds(a), pct*100, delta.Round(time.Millisecond))
+	// The figure is the median of the per-minute p95 over each window,
+	// not the p95 of the window's requests, and is named as such.
+	res.Reason = fmt.Sprintf("median p95 over the window %s → %s (%+.0f%%, %+s)", seconds(b), seconds(a), pct*100, delta.Round(time.Millisecond))
 	switch {
 	case pct >= cfg.LatencyDegradedPct && delta >= cfg.LatencyDegradedAbs:
 		res.Status = StatusDegraded
+		if cp < cfg.LatencyDegradedFromCheckpoint {
+			res.Status = StatusInvestigate
+			res.Reason += fmt.Sprintf("; capped at investigate before +%s (warm-up)", cfg.LatencyDegradedFromCheckpoint)
+		}
 	case pct >= cfg.LatencyInvestigatePct && delta >= cfg.LatencyInvestigateAbs:
 		res.Status = StatusInvestigate
 	default:
@@ -233,11 +249,10 @@ func latencySignal(cfg Config, s Signals, before, after window, vol volumeCheck)
 	return res
 }
 
-func errorRateSignal(cfg Config, s Signals, before, after window, vol volumeCheck) SignalResult {
+func errorRateSignal(cfg Config, s Signals, before, after window, vol volumeCheck, cp time.Duration) SignalResult {
 	res := SignalResult{Name: SignalErrorRate}
 	if !vol.ok {
-		res.Status, res.Reason = StatusInsufficientData, vol.reason
-		return res
+		return bluntErrorRule(cfg, s, after, vol, cp)
 	}
 	eb, okB := before.count(s.ErrorRate)
 	ea, okA := after.count(s.ErrorRate)
@@ -256,6 +271,30 @@ func errorRateSignal(cfg Config, s Signals, before, after window, vol volumeChec
 	default:
 		res.Status = StatusOK
 	}
+	return res
+}
+
+// bluntErrorRule handles an error rate below the volume guard. With
+// fallback A, the checkpoints before the last one still catch a blunt
+// regression; anything subtler waits for the last checkpoint, whose
+// window holds the most requests. The before window plays no part: with
+// so few requests, a ratio to it would mean little.
+func bluntErrorRule(cfg Config, s Signals, after window, vol volumeCheck, cp time.Duration) SignalResult {
+	res := SignalResult{Name: SignalErrorRate, Status: StatusInsufficientData, Reason: vol.reason}
+	if !cfg.BluntRule || cp >= Checkpoints[len(Checkpoints)-1] || vol.after <= 0 {
+		return res
+	}
+	ea, ok := after.count(s.ErrorRate)
+	if !ok {
+		return res
+	}
+	ra := ea / vol.after
+	if ra > cfg.BluntErrorRate && ea >= cfg.BluntErrorMinErr {
+		res.Status = StatusDegraded
+		res.Reason = fmt.Sprintf("5xx %.1f%% (%.0f errors in %.0f requests) after, a blunt regression despite the low volume", ra*100, ea, vol.after)
+		return res
+	}
+	res.Reason += fmt.Sprintf("; blunt rule (5xx above %.0f%% with at least %.0f errors) not triggered", cfg.BluntErrorRate*100, cfg.BluntErrorMinErr)
 	return res
 }
 

@@ -211,6 +211,8 @@ services:
     thresholds:
       min_requests: 50
       rollout_unavailable_grace: 90s
+      blunt_rule: false
+      latency_degraded_from_checkpoint: 5m
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +222,7 @@ services:
 	}
 
 	cfg, tpl := s.For(provider.Service{Namespace: "prod", Name: "api"})
-	if cfg.MinRequests != 100 || cfg.RolloutUnavailableGrace != 60*time.Second {
+	if cfg.MinRequests != 100 || cfg.RolloutUnavailableGrace != 60*time.Second || !cfg.BluntRule {
 		t.Errorf("defaults section not applied alone: %+v", cfg)
 	}
 	if !strings.Contains(tpl.RequestRate, "http_server_requests_seconds_count") || tpl.ErrorRate != DefaultTemplates().ErrorRate {
@@ -228,7 +230,8 @@ services:
 	}
 
 	cfg, _ = s.For(provider.Service{Namespace: "prod", Name: "checkout"})
-	if cfg.MinRequests != 50 || cfg.RolloutUnavailableGrace != 90*time.Second || cfg.UnavailableGrace != 2*time.Minute {
+	if cfg.MinRequests != 50 || cfg.RolloutUnavailableGrace != 90*time.Second || cfg.UnavailableGrace != 2*time.Minute ||
+		cfg.BluntRule || cfg.LatencyDegradedFromCheckpoint != 5*time.Minute {
 		t.Errorf("service section: %+v", cfg)
 	}
 
