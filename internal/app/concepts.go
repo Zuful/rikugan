@@ -34,7 +34,7 @@ import (
 //
 // Supported values:
 //   - kubernetes (default) — uses the k8sClient passed in by the
-//     caller (also shared with versioning/kubernetes and runes in
+//     caller (also shared with the image-provenance tool and runes in
 //     the unified binary). Also registers the orchk8s.Provider
 //     directly for its find_pods_by_service_name discovery helper.
 //   - dockercompose — builds a dockercompose.Provider, picking up
@@ -46,7 +46,7 @@ import (
 //
 // Why k8sClient stays in the signature instead of moving the
 // selection up into Setup/SetupOrchestration: the unified Setup()
-// also needs the k8sClient for versioning/kubernetes and runes, so
+// also needs the k8sClient for the image-provenance tool and runes, so
 // it builds it unconditionally; piping it through this helper keeps
 // one branch point. The per-concept SetupOrchestration() is what
 // reads the env var first and decides whether to build the k8s

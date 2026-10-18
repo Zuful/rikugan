@@ -3,7 +3,7 @@
 // (diagnose_pod, find_pods_by_service) that operate on a live cluster.
 //
 // The kubernetes.Interface is built once (via pkg/kubernetes) and the
-// resulting client is shared with the versioning/kubernetes provider so
+// resulting client is shared with the image-provenance correlation provider so
 // both packages exercise the same cluster without two parallel
 // authentication chains.
 package kubernetes

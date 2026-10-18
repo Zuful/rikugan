@@ -60,19 +60,18 @@ systemd orchestration provider for hosts without it.
 
 ## Where today's code sits relative to the ontology
 
-The ontology is ahead of the package layout in a few places. Nothing has
-been moved yet; these are the known gaps.
+The ontology is ahead of the package layout in a few places. These are
+the known gaps, and the moves already made.
 
 - **`internal/versioning/argocd`** (`get_app_status`, `list_degraded_apps`)
   answers "what is deployed and is it healthy?" — that is concept 5b,
   not 5a. It moves to `internal/deployments/argocd` when the argocd
   `DeploymentSource` provider lands (proactive mode phase 3).
-- **`internal/versioning/kubernetes`** (`get_image_provenance`) maps a
-  running image back to a commit. It bridges 5b and 5a: it reads
-  deployment state and answers in versioning terms, which is what the
-  correlation layer below is for. It moves to `internal/correlation` in
-  a short PR of its own, at the latest together with the dockercompose
-  `DeploymentSource` in proactive mode phase 2.
+- **`get_image_provenance`** maps a running image back to a commit. It
+  bridges 5b and 5a: it reads deployment state and answers in versioning
+  terms, which is what the correlation layer below is for. It lived in
+  `internal/versioning/kubernetes` and now lives in
+  `internal/correlation/imageprovenance`.
 - **PagerDuty** lives under `alerts` and implements `AlertsProvider`.
   Its incident timeline and `get_current_oncalls` are concept 6 material;
   they stay in `alerts` until a second incident/ticketing backend

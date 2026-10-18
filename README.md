@@ -56,10 +56,10 @@ Three concepts ship tools without a concept interface yet (the interface lands o
 
 | Concept | Backend(s) today |
 | --- | --- |
-| Versioning | github, gitlab, argocd, kubernetes (image provenance) |
+| Versioning | github, gitlab, argocd |
 | Tracing | jaeger |
 | Security | falco |
-| Correlation | runes (`six_eyes`) — cross-concept tool, doesn't fit a single interface |
+| Correlation | runes (`six_eyes`), deploy health (`check_deploy_health`), image provenance (`get_image_provenance`) — cross-concept tools, by design without an interface |
 
 See [MIGRATION.md](./MIGRATION.md) for the mapping from the pre-refactor technology-prefixed tool names (`query_range`, `diagnose_pod`, `alertmanager_list_active_alerts`, …) to the current concept tools.
 
@@ -291,17 +291,6 @@ Lists who is currently on-call across the org, grouped by escalation policy and 
 
 All tools here are backend-specific. A concept interface will land when a second versioning backend is added (e.g. Bitbucket).
 
-#### `get_image_provenance`  *(kubernetes)*
-
-Bridges running pods to source code by extracting container image tags and identifying Git SHAs.
-
-| Parameter   | Type   | Required | Description                     |
-|-------------|--------|----------|---------------------------------|
-| `namespace` | string | yes      | Kubernetes namespace.           |
-| `pod_name`  | string | yes      | Name of the pod to inspect.     |
-
-Parses each container's image reference into registry, repository, and tag. If a tag matches a Git SHA pattern (7–40 hex characters), it's flagged and the report includes an explicit pointer to `get_commit_diff`. Covers both regular and init containers.
-
 #### `get_recent_commits` · `get_commit_diff`  *(github)*
 
 Fetches recent commits or the full diff for a specific commit, with per-file patches.
@@ -380,6 +369,17 @@ Groups Falco events for a pod by rule name (e.g. *"3× Terminal shell in contain
 | `namespace` | string | no       | Recommended for precision.                  |
 
 ### Correlation
+
+#### `get_image_provenance`  *(correlation — kubernetes only for now)*
+
+Bridges running pods to source code by extracting container image tags and identifying Git SHAs. It reads deployment state and answers in versioning terms, so it lives in the correlation layer rather than in either concept (see [docs/ontology.md](./docs/ontology.md)).
+
+| Parameter   | Type   | Required | Description                     |
+|-------------|--------|----------|---------------------------------|
+| `namespace` | string | yes      | Kubernetes namespace.           |
+| `pod_name`  | string | yes      | Name of the pod to inspect.     |
+
+Parses each container's image reference into registry, repository, and tag. If a tag matches a Git SHA pattern (7–40 hex characters), it's flagged and the report includes an explicit pointer to `get_commit_diff`. Covers both regular and init containers.
 
 #### `six_eyes`  *(runes — cross-concept tool, unified binary only)*
 

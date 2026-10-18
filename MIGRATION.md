@@ -110,7 +110,7 @@ backend prefix (when present) is preserved so calls remain unambiguous.
 | `list_issues_for_release` | sentry | Release attribution — no analog in AlertManager or PagerDuty |
 | `get_current_oncalls` | pagerduty | On-call rotation — no analog in AlertManager or Sentry |
 | `find_pods_by_service_name` | kubernetes (orchestration) | Discovery helper — Docker Compose's service name = container name needs no analog |
-| `get_image_provenance` | kubernetes (versioning) | Walks a pod's image tags for Git SHAs — bridges orchestration to versioning |
+| `get_image_provenance` | kubernetes (correlation, moved from versioning) | Walks a pod's image tags for Git SHAs — bridges deployments to versioning |
 | `analyze_pod_audit` | falco | Kubernetes audit-log analysis specific to falco |
 | `get_security_events` | falco | Falco runtime alerts — no concept interface defined yet |
 | `find_slow_traces`, `analyze_trace` | jaeger | Tracing concept interface not yet defined |

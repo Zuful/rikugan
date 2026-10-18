@@ -9,7 +9,10 @@
 // through OrchestrationProvider and MetricsProvider so it stays
 // agnostic of which backend the operator configured.
 //
-// Sub-package: runes (the six_eyes correlator). Available only in
-// the unified rikugan binary; the per-concept binaries deliberately
-// don't include it because it crosses concept boundaries.
+// Sub-packages: runes (the six_eyes correlator), deployhealth
+// (check_deploy_health) and imageprovenance (get_image_provenance,
+// which reads deployment state and answers in versioning terms). They
+// are available only in the unified rikugan binary; the per-concept
+// binaries deliberately don't include them because they cross concept
+// boundaries.
 package correlation
