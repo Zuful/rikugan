@@ -555,3 +555,72 @@ func TestStatusSeverity(t *testing.T) {
 		}
 	}
 }
+
+func TestEvaluate_ExplicitCheckpointReadLate(t *testing.T) {
+	// The daemon restarted at +40 and runs the +15 checkpoint it missed:
+	// the after window still ends at +15, never at "now".
+	s := healthy()
+	s.LatencyP95 = profile(func(m float64) float64 {
+		if m >= 20 {
+			return 0.900 // a spike long after +15 must not count
+		}
+		return 0.120
+	})
+	in := inputs(s, 40)
+	in.Checkpoint = 15 * time.Minute
+	r := Evaluate(DefaultConfig(), in)
+	if r.Outcome != OutcomeEvaluated || r.Checkpoint != 15*time.Minute || r.Verdict != StatusOK {
+		t.Errorf("late +15: outcome %s checkpoint %s verdict %s\n%s", r.Outcome, r.Checkpoint, r.Verdict, dump(r))
+	}
+
+	// A checkpoint not reached yet falls back to the usual selection.
+	in = inputs(healthy(), 10)
+	in.Checkpoint = 15 * time.Minute
+	if r := Evaluate(DefaultConfig(), in); r.Checkpoint != 5*time.Minute {
+		t.Errorf("unreached +15 at +10: checkpoint %s, want 5m", r.Checkpoint)
+	}
+}
+
+func TestEvaluate_BeforeEndAfterAnEarlierRollout(t *testing.T) {
+	// A broken rollout started 20 minutes before this fix-forward and
+	// pushed p95 to 450 ms. The fix-forward does not fix it. With the
+	// usual before window (30 minutes before StartedAt, two thirds of it
+	// broken) the regression is invisible; ending the window when the
+	// broken rollout started compares with the last stable period.
+	start := rollout().StartedAt
+	previous := start.Add(-20 * time.Minute)
+	var p95 Series
+	for m := -60.0; m < 31; m++ {
+		at := minute(m)
+		v := 0.120
+		if !at.Before(previous) {
+			v = 0.450
+		}
+		p95 = append(p95, provider.MetricSample{Time: at, Value: v})
+	}
+	s := healthy()
+	s.RequestRate = constantSeries(-60, 31, perMinute(100))
+	s.ErrorRate = constantSeries(-60, 31, 0)
+	s.LatencyP95 = p95
+
+	in := inputs(s, 15)
+	if r := Evaluate(DefaultConfig(), in); r.Verdict != StatusOK {
+		t.Fatalf("usual window: verdict %s, want the regression masked (OK)\n%s", r.Verdict, dump(r))
+	}
+	in.BeforeEnd = previous
+	r := Evaluate(DefaultConfig(), in)
+	if got, _ := r.Signal(SignalLatency); got.Status != StatusDegraded {
+		t.Errorf("window ending at the previous rollout: latency %+v\n%s", got, dump(r))
+	}
+	if !strings.Contains(strings.Join(r.Notes, "\n"), "last stable period") {
+		t.Errorf("notes %q do not explain the before window", r.Notes)
+	}
+}
+
+func constantSeries(fromMinute, toMinute, v float64) Series {
+	var s Series
+	for m := fromMinute; m < toMinute; m++ {
+		s = append(s, provider.MetricSample{Time: minute(m), Value: v})
+	}
+	return s
+}

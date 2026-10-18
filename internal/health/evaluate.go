@@ -36,6 +36,14 @@ type Inputs struct {
 	Seasonal *Signals
 	// Instances are the instances of the rollout's revision.
 	Instances []provider.Instance
+	// Checkpoint, when set, is the checkpoint to evaluate, instead of
+	// the latest one reached at Now. The daemon sets it: it checks each
+	// checkpoint in turn, possibly late after a restart.
+	Checkpoint time.Duration
+	// BeforeEnd, when set, ends the before window instead of the
+	// rollout's StartedAt: when this rollout follows another one closely,
+	// the before window must end where the last stable period did.
+	BeforeEnd time.Time
 }
 
 // SelectCheckpoint picks the latest checkpoint a completed rollout has
@@ -80,6 +88,9 @@ func Evaluate(cfg Config, in Inputs) Report {
 	}
 
 	cp, outcome := SelectCheckpoint(cfg, in.Rollout.CompletedAt, in.Now)
+	if in.Checkpoint > 0 && in.Now.Sub(in.Rollout.CompletedAt) >= in.Checkpoint {
+		cp, outcome = in.Checkpoint, OutcomeEvaluated
+	}
 	r.Outcome = outcome
 	switch outcome {
 	case OutcomeTooEarly:
@@ -96,7 +107,13 @@ func Evaluate(cfg Config, in Inputs) Report {
 		r.Notes = append(r.Notes, "rollback to revision "+in.Rollout.Sequence)
 	}
 
-	before := window{in.Rollout.StartedAt.Add(-cfg.BeforeWindow), in.Rollout.StartedAt}
+	beforeEnd := in.Rollout.StartedAt
+	if !in.BeforeEnd.IsZero() && in.BeforeEnd.Before(beforeEnd) {
+		beforeEnd = in.BeforeEnd
+		r.Notes = append(r.Notes, fmt.Sprintf("before window ends at %s, when the previous rollout started %s before this one: the last stable period",
+			beforeEnd.UTC().Format("15:04:05Z"), in.Rollout.StartedAt.Sub(beforeEnd).Round(time.Second)))
+	}
+	before := window{beforeEnd.Add(-cfg.BeforeWindow), beforeEnd}
 	after := window{in.Rollout.CompletedAt, in.Rollout.CompletedAt.Add(cp)}
 
 	volume := volumeGuard(cfg, in.Current.RequestRate, before, after)

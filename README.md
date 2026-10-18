@@ -510,6 +510,19 @@ ALERTS_PROVIDER=pagerduty \
   ./bin/rikugan-alerts
 ```
 
+### Proactive mode: `rikugan serve` (in progress)
+
+`rikugan serve` is the daemon mode of the same binary: it follows the rollouts of the watched namespaces and runs the `check_deploy_health` rules on each one at +5, +15 and +30 minutes after it completes, and at once when it fails. Every rollout, verdict and skipped checkpoint is recorded in an append-only journal (`verdicts.jsonl`) under the state directory, from which it resumes after a restart without running a check twice; checkpoints missed while it was down are summed up in one late check. Each verdict is also written to stdout as one JSON line, for log pipelines.
+
+```bash
+RIKUGAN_SERVE_NAMESPACES=shop,payments \
+  PROMETHEUS_URL=http://prometheus:9090 \
+  RIKUGAN_STATE_DIR=/var/lib/rikugan \
+  ./bin/rikugan serve
+```
+
+It runs as a **single instance**: a lock on the state directory makes a second one refuse to start, but that lock is unreliable on network file systems, where the state directory must not live. Rollout detection is Kubernetes-only for now. Notifications, the verdicts API and packaging (Helm, Compose, systemd) are the next steps.
+
 ### Docker
 
 ```sh
@@ -582,6 +595,8 @@ You can also wire one entry per per-concept binary if you prefer to keep them is
 | `TELEGRAM_BOT_TOKEN`        | Telegram bot token (from @BotFather)                          | For proactive-mode notifications to Telegram (read by `rikugan serve`, in progress) |
 | `TELEGRAM_CHAT_ID`          | Chat or channel the bot posts to                              | With `TELEGRAM_BOT_TOKEN` |
 | `SLACK_WEBHOOK_URL`         | Slack incoming-webhook URL (https)                            | For proactive-mode notifications to Slack (read by `rikugan serve`, in progress) |
+| `RIKUGAN_STATE_DIR`         | `rikugan serve`: journal and lock directory (local disk, not NFS) | No (defaults to `/var/lib/rikugan`) |
+| `RIKUGAN_SERVE_NAMESPACES`  | `rikugan serve`: comma-separated namespaces whose rollouts are watched | Outside a pod (in a pod, defaults to its own namespace) |
 | `RIKUGAN_LOG_LEVEL`         | Log verbosity: `debug` / `info` / `warn` / `error`            | No (defaults to `info`) |
 
 > **Graceful by design.** Missing config = skipped backend. Rikugan logs which providers were activated and which were skipped at startup, so you always know what's available.

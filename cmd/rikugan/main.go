@@ -1,7 +1,9 @@
 // Command rikugan starts the Rikugan MCP server over STDIO transport.
+// "rikugan serve" starts the proactive mode's daemon instead.
 //
 // Logs are written as structured JSON to stderr (the STDIO MCP transport
-// uses stdin/stdout for the JSON-RPC protocol).
+// uses stdin/stdout for the JSON-RPC protocol). Under serve, stdout
+// carries one JSON line per verdict, for log pipelines.
 package main
 
 import (
@@ -25,6 +27,13 @@ func main() {
 	logger := logging.New("RIKUGAN_LOG_LEVEL")
 	slog.SetDefault(logger)
 
+	if len(os.Args) > 1 && os.Args[1] == "serve" {
+		if err := serve(logger); err != nil {
+			logger.Error("rikugan serve exited with error", slog.String("error", err.Error()))
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(logger); err != nil {
 		logger.Error("server exited with error", slog.String("error", err.Error()))
 		os.Exit(1)
@@ -68,4 +77,13 @@ func run(logger *slog.Logger) error {
 		}
 		return nil
 	}
+}
+
+// serve runs the daemon until SIGINT or SIGTERM.
+func serve(logger *slog.Logger) error {
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+	verdicts := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	logger.Info("rikugan serve", slog.String("version", version))
+	return app.Serve(ctx, logger, verdicts)
 }
