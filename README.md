@@ -43,6 +43,8 @@ Core logic — query building, projection into concept types, report generation 
 
 ### Concept catalogue
 
+The full list of concepts Rikugan models, with priorities and planned backends, is in [docs/ontology.md](./docs/ontology.md). The table below covers the concepts that have an interface today.
+
 | Concept | Interface methods | Backends |
 | --- | --- | --- |
 | Orchestration | `ListServices` / `GetServiceState` / `DescribeService` / `GetRecentEvents` / `RestartService` / `GetServiceHistory` | kubernetes (default), docker-compose (selectable via `ORCHESTRATION_PROVIDER`) |
