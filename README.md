@@ -408,7 +408,7 @@ Findings are sorted by severity, followed by pod summary, events, and raw metric
 
 ### Prerequisites
 
-- Go 1.25+
+- Go 1.26+
 - At least one configured backend. For the orchestration concept that means either a Kubernetes cluster (kubeconfig or in-cluster) or a Docker Compose project, depending on `ORCHESTRATION_PROVIDER`.
 
 Every other backend is optional. Unset env vars degrade gracefully — the matching tools simply don't register and Rikugan logs the skip at startup.
@@ -474,7 +474,7 @@ ALERTS_PROVIDER=pagerduty \
 docker build -t rikugan:latest .
 ```
 
-Multi-stage build (Go 1.25 Alpine builder, distroless runtime), runs as non-root.
+Multi-stage build (Go 1.27 Alpine builder, distroless runtime), runs as non-root.
 
 ### Helm
 

@@ -39,7 +39,11 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: stable
+          # Pinned below stable: gosec lags new Go releases and fails on
+          # export data it cannot decode ("export data version 5 is greater
+          # than maximum supported version 4" with Go 1.27). Bump once
+          # gosec supports the newer toolchain.
+          go-version: '1.26'
 
       # We install gosec as a binary rather than using the marketplace
       # action — the `securego/gosec@v2` major-version tag the skill
