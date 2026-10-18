@@ -118,7 +118,7 @@ func (p *Provider) handleSixEyes(
 	// Prometheus queries — each best-effort
 	for i, q := range queries {
 		g.Go(func() error {
-			val, _, qErr := p.prom.QueryRange(gCtx, q.PromQL, promv1.Range{
+			val, _, _, qErr := p.prom.QueryRange(gCtx, q.PromQL, promv1.Range{
 				Start: q.Range.Start,
 				End:   q.Range.End,
 				Step:  q.Range.Step,
