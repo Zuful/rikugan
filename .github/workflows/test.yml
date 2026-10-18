@@ -50,3 +50,21 @@ jobs:
           files: ./coverage.out
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
+
+  integration:
+    name: Integration (kind)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: stable
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+
+      - name: Run integration tests
+        run: go test -tags integration -run Integration -v -count=1 ./...
