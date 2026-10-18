@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -93,14 +94,21 @@ func Serve(ctx context.Context, logger, verdicts *slog.Logger) error {
 	defer func() { _ = j.Close() }()
 
 	source := deployk8s.New(k8sClient, logger).WithNamespaces(namespaces...)
+	orchestration := orchk8s.NewFromClient(k8sClient, orchk8s.WithLogger(logger))
+	collector := &health.Collector{
+		Metrics:       prometheus.NewFromAPI(promAPI, prometheus.WithLogger(logger)),
+		Orchestration: orchestration,
+		Deployments:   source,
+		Settings:      settings.For,
+	}
+	sweepCfg, err := serveSweep(namespaces, orchestration, collector)
+	if err != nil {
+		return err
+	}
 	daemon := &watch.Daemon{
-		Source: source,
-		Checker: &health.Collector{
-			Metrics:       prometheus.NewFromAPI(promAPI, prometheus.WithLogger(logger)),
-			Orchestration: orchk8s.NewFromClient(k8sClient, orchk8s.WithLogger(logger)),
-			Deployments:   source,
-			Settings:      settings.For,
-		},
+		Source:  source,
+		Checker: collector,
+		Sweep:   sweepCfg,
 		Journal: j,
 		Settings: func(svc provider.Service) health.Config {
 			cfg, _ := settings.For(svc)
@@ -149,6 +157,49 @@ func runWithAPI(ctx context.Context, daemon *watch.Daemon, srv *http.Server) err
 	return err
 }
 
+// serveSweep reads the periodic sweep's settings (design §6):
+// RIKUGAN_SWEEP_INTERVAL (default 4h, "off" to disable),
+// RIKUGAN_SWEEP_NAMESPACES (default: the watched namespaces),
+// RIKUGAN_SWEEP_EXCLUDE (names or namespace/name),
+// RIKUGAN_SWEEP_NOTIFY_WARNING and RIKUGAN_SWEEP_WARNING_PERSISTENCE.
+func serveSweep(namespaces []string, services provider.OrchestrationProvider, checker watch.SweepChecker) (*watch.SweepConfig, error) {
+	cfg := &watch.SweepConfig{Namespaces: namespaces, Services: services, Checker: checker}
+	switch raw := os.Getenv("RIKUGAN_SWEEP_INTERVAL"); raw {
+	case "":
+	case "off":
+		return nil, nil
+	default:
+		d, err := time.ParseDuration(raw)
+		if err != nil || d < time.Minute {
+			return nil, fmt.Errorf("RIKUGAN_SWEEP_INTERVAL: want a duration of at least 1m, such as 4h, or off; got %q", raw)
+		}
+		cfg.Interval = d
+	}
+	if ns := splitList(os.Getenv("RIKUGAN_SWEEP_NAMESPACES")); len(ns) > 0 {
+		cfg.Namespaces = ns
+	}
+	cfg.Exclude = splitList(os.Getenv("RIKUGAN_SWEEP_EXCLUDE"))
+	cfg.State.NotifyWarning = os.Getenv("RIKUGAN_SWEEP_NOTIFY_WARNING") == "true"
+	if raw := os.Getenv("RIKUGAN_SWEEP_WARNING_PERSISTENCE"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 {
+			return nil, fmt.Errorf("RIKUGAN_SWEEP_WARNING_PERSISTENCE: want a positive integer, got %q", raw)
+		}
+		cfg.State.WarningPersistence = n
+	}
+	return cfg, nil
+}
+
+func splitList(raw string) []string {
+	var out []string
+	for _, v := range strings.Split(raw, ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 // serveNotifier builds the notification side: every configured channel
 // (a half-configured one stops the daemon rather than going silent), the
 // primary alerts backend if any, consulted before each message, and
@@ -180,16 +231,8 @@ func serveNotifier(logger *slog.Logger) (*watch.Notifier, error) {
 // namespace rikugan itself runs in. Watching everything would need
 // cluster-wide rights, so it is never the silent default.
 func serveNamespaces() ([]string, error) {
-	if raw := os.Getenv("RIKUGAN_SERVE_NAMESPACES"); raw != "" {
-		var out []string
-		for _, ns := range strings.Split(raw, ",") {
-			if ns = strings.TrimSpace(ns); ns != "" {
-				out = append(out, ns)
-			}
-		}
-		if len(out) > 0 {
-			return out, nil
-		}
+	if out := splitList(os.Getenv("RIKUGAN_SERVE_NAMESPACES")); len(out) > 0 {
+		return out, nil
 	}
 	raw, err := os.ReadFile(serviceAccountNamespace)
 	if err != nil {

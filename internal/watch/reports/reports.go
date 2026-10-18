@@ -66,7 +66,8 @@ func (p *Provider) Tools() []provider.ToolDefinition {
 	tool := mcp.NewTool("get_watch_reports",
 		mcp.WithDescription(
 			"What has the proactive mode (rikugan serve) found lately? Lists the verdicts it recorded "+
-				"after each rollout (+5, +15 and +30 min checkpoints, and failed rollouts), newest first: "+
+				"after each rollout (+5, +15 and +30 min checkpoints, and failed rollouts) and in its "+
+				"periodic sweep (every service, every 4 hours by default), newest first: "+
 				"ok / investigate / degraded / insufficient_data, with the signals that were not ok. "+
 				"Start here when asked whether a recent deploy went well, then use check_deploy_health "+
 				"or the LEST tools to dig into a verdict. "+
@@ -110,10 +111,13 @@ func Render(verdicts []watch.Verdict, service, since string) string {
 		b.WriteString("No verdict recorded. Either no rollout completed in that period, or rikugan serve does not watch this service.\n")
 		return b.String()
 	}
-	b.WriteString("| Time (UTC) | Service | Revision | Checkpoint | Verdict | Signals not ok |\n|---|---|---|---|---|---|\n")
+	b.WriteString("| Time (UTC) | Service | Revision | Check | Verdict | Signals not ok |\n|---|---|---|---|---|---|\n")
 	for _, v := range verdicts {
 		cp := "+" + v.Checkpoint
-		if v.Checkpoint == "0s" {
+		switch {
+		case v.Source == "sweep":
+			cp = "periodic sweep"
+		case v.Checkpoint == "0s":
 			cp = "rollout failure"
 		}
 		if v.Late {

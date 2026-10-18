@@ -58,3 +58,41 @@ func TestRunWithAPIStopsWhenTheAPICannotListen(t *testing.T) {
 		t.Error("runWithAPI waited for the context instead of stopping")
 	}
 }
+
+func TestServeSweep(t *testing.T) {
+	t.Setenv("RIKUGAN_SWEEP_INTERVAL", "")
+	t.Setenv("RIKUGAN_SWEEP_NAMESPACES", "")
+	t.Setenv("RIKUGAN_SWEEP_EXCLUDE", "batch, shop/legacy")
+	t.Setenv("RIKUGAN_SWEEP_NOTIFY_WARNING", "true")
+	t.Setenv("RIKUGAN_SWEEP_WARNING_PERSISTENCE", "2")
+	cfg, err := serveSweep([]string{"shop"}, nil, nil)
+	if err != nil || cfg == nil {
+		t.Fatalf("%v %v", cfg, err)
+	}
+	if cfg.Interval != 0 || !reflect.DeepEqual(cfg.Namespaces, []string{"shop"}) ||
+		!reflect.DeepEqual(cfg.Exclude, []string{"batch", "shop/legacy"}) ||
+		!cfg.State.NotifyWarning || cfg.State.WarningPersistence != 2 {
+		t.Errorf("config %+v", cfg)
+	}
+
+	t.Setenv("RIKUGAN_SWEEP_NAMESPACES", "a,b")
+	t.Setenv("RIKUGAN_SWEEP_INTERVAL", "2h")
+	if cfg, _ := serveSweep([]string{"shop"}, nil, nil); cfg.Interval != 2*time.Hour || len(cfg.Namespaces) != 2 {
+		t.Errorf("overrides: %+v", cfg)
+	}
+	t.Setenv("RIKUGAN_SWEEP_INTERVAL", "off")
+	if cfg, err := serveSweep(nil, nil, nil); cfg != nil || err != nil {
+		t.Errorf("off: %v %v", cfg, err)
+	}
+	for _, bad := range []string{"4", "10s"} {
+		t.Setenv("RIKUGAN_SWEEP_INTERVAL", bad)
+		if _, err := serveSweep(nil, nil, nil); err == nil {
+			t.Errorf("interval %q accepted", bad)
+		}
+	}
+	t.Setenv("RIKUGAN_SWEEP_INTERVAL", "")
+	t.Setenv("RIKUGAN_SWEEP_WARNING_PERSISTENCE", "0")
+	if _, err := serveSweep(nil, nil, nil); err == nil {
+		t.Error("persistence 0 accepted")
+	}
+}
