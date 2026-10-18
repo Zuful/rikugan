@@ -9,6 +9,7 @@ import (
 	"github.com/Zuful/rikugan/internal/versioning/argocd"
 	"github.com/Zuful/rikugan/internal/versioning/github"
 	"github.com/Zuful/rikugan/internal/versioning/gitlab"
+	"github.com/Zuful/rikugan/internal/watch/reports"
 	"github.com/Zuful/rikugan/pkg/dispatcher"
 	"github.com/Zuful/rikugan/pkg/provider"
 )
@@ -57,6 +58,9 @@ func optionalProviders(logger *slog.Logger) []optionalProvider {
 				return nil, err
 			}
 			return jaeger.NewFromClient(c, jaeger.WithLogger(logger)), nil
+		}},
+		{"watch reports", func() (provider.Provider, error) {
+			return reports.FromEnv(logger)
 		}},
 		{"falco", func() (provider.Provider, error) {
 			c, err := falco.BuildClient("")

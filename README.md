@@ -62,6 +62,7 @@ Three concepts ship tools without a concept interface yet (the interface lands o
 | Tracing | jaeger |
 | Security | falco |
 | Correlation | runes (`six_eyes`), deploy health (`check_deploy_health`), image provenance (`get_image_provenance`) — cross-concept tools, by design without an interface |
+| Proactive mode | `get_watch_reports`: verdicts recorded by `rikugan serve`, read through its API |
 
 See [MIGRATION.md](./MIGRATION.md) for the mapping from the pre-refactor technology-prefixed tool names (`query_range`, `diagnose_pod`, `alertmanager_list_active_alerts`, …) to the current concept tools.
 
@@ -446,6 +447,18 @@ services:
 
 Templates are Go templates over `{{.Namespace}}`, `{{.Service}}` and `{{.Revision}}`, written in the metrics backend's query language, and must return one aggregated series. Unknown keys in the file are rejected.
 
+### Proactive mode
+
+#### `get_watch_reports`
+
+What has `rikugan serve` found lately? Lists the verdicts the daemon recorded after each rollout (+5, +15, +30 min checkpoints, and failed rollouts), newest first, with the signals that were not ok. Registered when `RIKUGAN_SERVE_URL` points at a running daemon (see [Proactive mode](#proactive-mode-rikugan-serve-in-progress)).
+
+| Parameter | Type   | Required | Description |
+|-----------|--------|----------|-------------|
+| `service` | string | No       | `namespace/name`, or a bare name for every namespace; empty for all services |
+| `since`   | string | No       | A duration such as `6h`, or an RFC 3339 time (default `24h`) |
+| `limit`   | number | No       | Maximum number of verdicts (default 50) |
+
 ## Getting Started
 
 ### Prerequisites
@@ -521,7 +534,9 @@ RIKUGAN_SERVE_NAMESPACES=shop,payments \
   ./bin/rikugan serve
 ```
 
-It runs as a **single instance**: a lock on the state directory makes a second one refuse to start, but that lock is unreliable on network file systems, where the state directory must not live. Rollout detection is Kubernetes-only for now. The verdicts API and packaging (Helm, Compose, systemd) are the next steps.
+It runs as a **single instance**: a lock on the state directory makes a second one refuse to start, but that lock is unreliable on network file systems, where the state directory must not live. Rollout detection is Kubernetes-only for now. Packaging (Helm, Compose, systemd) is the next step.
+
+**Verdicts API.** `GET /v1/verdicts?service=<namespace/name or name>&since=<6h or RFC 3339>&limit=<n>` returns the recorded verdicts, newest first; `GET /healthz` answers without data. It listens on `RIKUGAN_SERVE_LISTEN` (default `127.0.0.1:8080`). On a loopback address the token is optional; on any other address (`0.0.0.0`, `:8080`, a non-loopback IP) `rikugan serve` refuses to start without `RIKUGAN_SERVE_TOKEN`, then requires `Authorization: Bearer <token>`, compared in constant time. The MCP tool `get_watch_reports` reads this API: point it at the daemon with `RIKUGAN_SERVE_URL` (and `RIKUGAN_SERVE_TOKEN`).
 
 **Notifications** go to every configured channel (Telegram, Slack; see `TELEGRAM_*` and `SLACK_WEBHOOK_URL`): a degraded verdict or a failed rollout is `critical`, an investigate verdict a `warning`; OK verdicts are only sent with `RIKUGAN_NOTIFY_ON_OK=true`. Each rollout gets one notification, and a later checkpoint only notifies again when the verdict gets worse, with one exception: after a critical, the first checkpoint back below degraded sends a single "recovered" message (insufficient data never counts as recovered). When an alerts backend is configured, alerts already firing for the service are mentioned in the message.
 
@@ -599,6 +614,9 @@ You can also wire one entry per per-concept binary if you prefer to keep them is
 | `SLACK_WEBHOOK_URL`         | Slack incoming-webhook URL (https)                            | For proactive-mode notifications to Slack (read by `rikugan serve`, in progress) |
 | `RIKUGAN_STATE_DIR`         | `rikugan serve`: journal and lock directory (local disk, not NFS) | No (defaults to `/var/lib/rikugan`) |
 | `RIKUGAN_SERVE_NAMESPACES`  | `rikugan serve`: comma-separated namespaces whose rollouts are watched | Outside a pod (in a pod, defaults to its own namespace) |
+| `RIKUGAN_SERVE_LISTEN`      | `rikugan serve`: verdicts API address                         | No (defaults to `127.0.0.1:8080`) |
+| `RIKUGAN_SERVE_TOKEN`       | Bearer token of the verdicts API; read by `rikugan serve` and by `get_watch_reports` | Required when `RIKUGAN_SERVE_LISTEN` is not loopback |
+| `RIKUGAN_SERVE_URL`         | Address of a running `rikugan serve`, for `get_watch_reports` | When the tool is wanted |
 | `RIKUGAN_NOTIFY_ON_OK`      | `rikugan serve`: also notify OK verdicts (`true`)             | No (defaults to off) |
 | `RIKUGAN_LOG_LEVEL`         | Log verbosity: `debug` / `info` / `warn` / `error`            | No (defaults to `info`) |
 

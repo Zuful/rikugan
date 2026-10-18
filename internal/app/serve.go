@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -19,6 +20,10 @@ import (
 	pkgk8s "github.com/Zuful/rikugan/pkg/kubernetes"
 	"github.com/Zuful/rikugan/pkg/provider"
 )
+
+// DefaultServeListen is the verdicts API's address when
+// RIKUGAN_SERVE_LISTEN is not set: loopback, where no token is required.
+const DefaultServeListen = "127.0.0.1:8080"
 
 // DefaultStateDir is where rikugan serve keeps its journal and lock when
 // RIKUGAN_STATE_DIR is not set; it matches systemd's
@@ -37,6 +42,15 @@ const serviceAccountNamespace = "/var/run/secrets/kubernetes.io/serviceaccount/n
 // Rollout detection is Kubernetes-only until the Docker Compose
 // DeploymentSource lands, and a metrics backend is required.
 func Serve(ctx context.Context, logger, verdicts *slog.Logger) error {
+	listen := os.Getenv("RIKUGAN_SERVE_LISTEN")
+	if listen == "" {
+		listen = DefaultServeListen
+	}
+	token := os.Getenv("RIKUGAN_SERVE_TOKEN")
+	if err := watch.CheckListen(listen, token); err != nil {
+		return err
+	}
+
 	stateDir := os.Getenv("RIKUGAN_STATE_DIR")
 	if stateDir == "" {
 		stateDir = DefaultStateDir
@@ -99,8 +113,40 @@ func Serve(ctx context.Context, logger, verdicts *slog.Logger) error {
 	logger.Info("rikugan serve starting",
 		slog.String("state_dir", stateDir),
 		slog.String("namespaces", strings.Join(namespaces, ",")),
+		slog.String("listen", listen),
+		slog.Bool("token", token != ""),
 	)
-	return daemon.Run(ctx)
+	return runWithAPI(ctx, daemon, &http.Server{
+		Addr:              listen,
+		Handler:           watch.NewAPI(j, token, nil),
+		ReadHeaderTimeout: 10 * time.Second,
+	})
+}
+
+// runWithAPI runs the daemon and the verdicts API together: either one
+// stopping stops the other.
+func runWithAPI(ctx context.Context, daemon *watch.Daemon, srv *http.Server) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	apiErr := make(chan error, 1)
+	go func() {
+		err := srv.ListenAndServe()
+		if errors.Is(err, http.ErrServerClosed) {
+			err = nil
+		} else if err != nil {
+			err = fmt.Errorf("verdicts API: %w", err)
+		}
+		apiErr <- err
+		cancel()
+	}()
+	err := daemon.Run(ctx)
+	shutdownCtx, done := context.WithTimeout(context.Background(), 5*time.Second)
+	defer done()
+	_ = srv.Shutdown(shutdownCtx)
+	if aerr := <-apiErr; aerr != nil {
+		return aerr
+	}
+	return err
 }
 
 // serveNotifier builds the notification side: every configured channel
