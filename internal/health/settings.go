@@ -48,11 +48,17 @@ type Thresholds struct {
 	LatencyDegradedPct    *float64  `json:"latency_degraded_pct"`
 	LatencyDegradedAbs    *Duration `json:"latency_degraded_abs"`
 
+	LatencyDegradedFromCheckpoint *Duration `json:"latency_degraded_from_checkpoint"`
+
 	ErrorRatio             *float64 `json:"error_ratio"`
 	ErrorInvestigateRate   *float64 `json:"error_investigate_rate"`
 	ErrorInvestigateMinErr *float64 `json:"error_investigate_min_errors"`
 	ErrorDegradedRate      *float64 `json:"error_degraded_rate"`
 	ErrorDegradedMinErr    *float64 `json:"error_degraded_min_errors"`
+
+	BluntRule        *bool    `json:"blunt_rule"`
+	BluntErrorRate   *float64 `json:"blunt_error_rate"`
+	BluntErrorMinErr *float64 `json:"blunt_error_min_errors"`
 
 	SaturationInvestigatePct *float64  `json:"saturation_investigate_pct"`
 	SaturationDegradedPct    *float64  `json:"saturation_degraded_pct"`
@@ -120,11 +126,17 @@ func (o Override) apply(cfg *Config, tpl *Templates) {
 	setDur(&cfg.LatencyInvestigateAbs, t.LatencyInvestigateAbs)
 	setNum(&cfg.LatencyDegradedPct, t.LatencyDegradedPct)
 	setDur(&cfg.LatencyDegradedAbs, t.LatencyDegradedAbs)
+	setDur(&cfg.LatencyDegradedFromCheckpoint, t.LatencyDegradedFromCheckpoint)
 	setNum(&cfg.ErrorRatio, t.ErrorRatio)
 	setNum(&cfg.ErrorInvestigateRate, t.ErrorInvestigateRate)
 	setNum(&cfg.ErrorInvestigateMinErr, t.ErrorInvestigateMinErr)
 	setNum(&cfg.ErrorDegradedRate, t.ErrorDegradedRate)
 	setNum(&cfg.ErrorDegradedMinErr, t.ErrorDegradedMinErr)
+	if t.BluntRule != nil {
+		cfg.BluntRule = *t.BluntRule
+	}
+	setNum(&cfg.BluntErrorRate, t.BluntErrorRate)
+	setNum(&cfg.BluntErrorMinErr, t.BluntErrorMinErr)
 	setNum(&cfg.SaturationInvestigatePct, t.SaturationInvestigatePct)
 	setNum(&cfg.SaturationDegradedPct, t.SaturationDegradedPct)
 	setDur(&cfg.SaturationFromCheckpoint, t.SaturationFromCheckpoint)
