@@ -39,8 +39,9 @@ const (
 // of its own: its rollouts feed the health checks of the correlation
 // concept.
 type Provider struct {
-	client kubernetes.Interface
-	logger *slog.Logger
+	client     kubernetes.Interface
+	logger     *slog.Logger
+	namespaces []string // WatchRollouts scope; empty means all
 }
 
 // New builds a Provider on an existing clientset.
