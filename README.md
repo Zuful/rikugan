@@ -51,7 +51,7 @@ The full list of concepts Rikugan models, with priorities and planned backends, 
 | Logs | `GetLogs` / `TailLogs` / `SearchLogs` | loki |
 | Metrics | `GetMetric` / `CompareToBaseline` / `ListAvailableMetrics` | prometheus |
 | Alerts | `ListActiveAlerts` / `GetAlertDetails` | alertmanager, sentry, pagerduty (one selected as primary via `ALERTS_PROVIDER`; others register their backend-specific extras only) |
-| Deployments | `LastRollout` | kubernetes |
+| Deployments | `LastRollout` / `WatchRollouts` | kubernetes |
 | Communication | `PostMessage` | telegram, slack — every configured channel receives the proactive mode's notifications; no MCP tool, messages leave from the daemon |
 
 Three concepts ship tools without a concept interface yet (the interface lands once a second backend exists to keep the abstraction honest):

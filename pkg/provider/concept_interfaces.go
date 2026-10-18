@@ -203,6 +203,10 @@ const (
 	// it has exceeded its deadline: the new revision will not become
 	// available without intervention.
 	RolloutFailed RolloutState = "failed"
+	// RolloutSuperseded means a newer rollout of the same service
+	// started before this one completed or failed. Only WatchRollouts
+	// reports it: the current rollout is never superseded.
+	RolloutSuperseded RolloutState = "superseded"
 )
 
 // Rollout is one change of the revision a service runs, as seen by the
@@ -240,6 +244,14 @@ type DeploymentSource interface {
 	// LastRollout returns the service's current rollout: the one that
 	// produced the revision it runs or is moving to.
 	LastRollout(ctx context.Context, svc Service) (Rollout, error)
+	// WatchRollouts reports rollouts as they end: completed, failed, or
+	// superseded by a newer one. A rollout that fails and later
+	// completes is reported twice, once per state. At start, the
+	// current rollout of every watched service is reported if it has
+	// already ended, so a consumer deduplicates on (service, sequence,
+	// state) against what it already recorded. The channel is closed
+	// when ctx is done.
+	WatchRollouts(ctx context.Context) (<-chan Rollout, error)
 }
 
 // Severity is how urgently a team message needs a human. It is generic
