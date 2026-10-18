@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,6 +28,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
+
+	"github.com/Zuful/rikugan/pkg/provider"
 )
 
 const (
@@ -82,7 +85,7 @@ func TestIntegration_RolloutTimestamps(t *testing.T) {
 		mutate    func(t *testing.T)
 	}{
 		{"scale 1 to 3", 3, true, func(t *testing.T) { scale(ctx, t, cs, ns, name, 3) }},
-		{"replace a pod", 3, true, func(t *testing.T) { deleteOnePod(ctx, t, cs, ns, base.TemplateKey) }},
+		{"replace a pod", 3, true, func(t *testing.T) { deleteOnePod(ctx, t, cs, ns, base.Revision) }},
 		{"scale 3 to 1", 1, false, func(t *testing.T) { scale(ctx, t, cs, ns, name, 1) }},
 		{"annotate deployment metadata", 1, false, func(t *testing.T) {
 			patch(ctx, t, cs, ns, name, `{"metadata":{"annotations":{"probe/touched":"yes"}}}`)
@@ -92,14 +95,14 @@ func TestIntegration_RolloutTimestamps(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			time.Sleep(settle)
 			tc.mutate(t)
-			sawUnready := waitPodsReady(ctx, t, cs, ns, base.TemplateKey, tc.replicas)
+			sawUnready := waitPodsReady(ctx, t, cs, ns, base.Revision, tc.replicas)
 			if tc.slowReady && !sawUnready {
 				t.Fatalf("no unready pod observed: the scenario did not exercise an in-progress sync")
 			}
 			got := waitComplete(ctx, t, cs, ns, name)
 			t.Logf("after %s: %+v", tc.name, got)
-			if got.Revision != base.Revision {
-				t.Errorf("revision moved: %s -> %s", base.Revision, got.Revision)
+			if got.Sequence != base.Sequence {
+				t.Errorf("revision moved: %s -> %s", base.Sequence, got.Sequence)
 			}
 			if !got.StartedAt.Equal(base.StartedAt) {
 				t.Errorf("StartedAt moved: %s -> %s", base.StartedAt, got.StartedAt)
@@ -114,7 +117,7 @@ func TestIntegration_RolloutTimestamps(t *testing.T) {
 	setVersion(ctx, t, cs, ns, name, versionB)
 	upgrade := waitComplete(ctx, t, cs, ns, name)
 	t.Logf("after template change: %+v", upgrade)
-	if upgrade.Revision == base.Revision {
+	if upgrade.Sequence == base.Sequence {
 		t.Fatalf("template change did not produce a new revision")
 	}
 	if upgrade.Rollback {
@@ -138,14 +141,56 @@ func TestIntegration_RolloutTimestamps(t *testing.T) {
 	if !rollback.Rollback {
 		t.Errorf("rollback to the first template not detected (no %s on the reused replicaset)", annotationRevisionHistory)
 	}
-	if rollback.TemplateKey != base.TemplateKey {
-		t.Errorf("rollback did not reuse the first replicaset: template %s, want %s", rollback.TemplateKey, base.TemplateKey)
+	if rollback.Revision != base.Revision {
+		t.Errorf("rollback did not reuse the first replicaset: template %s, want %s", rollback.Revision, base.Revision)
 	}
 	if rollback.StartedAt.Before(rollbackStart) {
 		t.Errorf("rollback StartedAt %s predates the rollback (%s): reused replicaset's creation time leaked through", rollback.StartedAt, rollbackStart)
 	}
 	if !rollback.CompletedAt.After(upgrade.CompletedAt) {
 		t.Errorf("rollback CompletedAt %s not after previous %s", rollback.CompletedAt, upgrade.CompletedAt)
+	}
+}
+
+// A rollout whose new pods never become ready must be reported failed
+// once the controller gives up (progressDeadlineSeconds), not left "in
+// progress" forever: a stalled rollout is the worst case the health
+// checks have to surface.
+func TestIntegration_StalledRolloutIsFailed(t *testing.T) {
+	cs := integrationClient(t)
+	ctx := context.Background()
+	ns := createNamespace(ctx, t, cs)
+	const name = "stall"
+
+	dep := deployment(name, versionA, 1)
+	deadline := int32(15)
+	dep.Spec.ProgressDeadlineSeconds = &deadline
+	if _, err := cs.AppsV1().Deployments(ns).Create(ctx, dep, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("create deployment: %v", err)
+	}
+	good := waitComplete(ctx, t, cs, ns, name)
+
+	time.Sleep(settle)
+	// Same image, but the readiness probe targets a port nothing listens
+	// on: the new ReplicaSet's pod runs and never becomes ready.
+	patch(ctx, t, cs, ns, name, `{"spec":{"template":{"spec":{"containers":[{"name":"app","readinessProbe":{"httpGet":{"path":"/","port":9999}}}]}}}}`)
+
+	inProgress := waitState(ctx, t, cs, ns, name, provider.RolloutInProgress)
+	t.Logf("while stalling: %+v", inProgress)
+	if inProgress.Sequence == good.Sequence || !inProgress.CompletedAt.IsZero() {
+		t.Errorf("in-progress rollout should be a new revision with no completion time: %+v", inProgress)
+	}
+
+	failed := waitState(ctx, t, cs, ns, name, provider.RolloutFailed)
+	t.Logf("after the progress deadline: %+v", failed)
+	if failed.Sequence != inProgress.Sequence {
+		t.Errorf("failed rollout is revision %s, want the stalled %s", failed.Sequence, inProgress.Sequence)
+	}
+	if failed.FailedAt.Before(failed.StartedAt) || !strings.HasPrefix(failed.FailureReason, reasonProgressDeadlineExceeded) {
+		t.Errorf("failure not described: FailedAt %s StartedAt %s reason %q", failed.FailedAt, failed.StartedAt, failed.FailureReason)
+	}
+	if !failed.CompletedAt.IsZero() {
+		t.Errorf("failed rollout has a completion time: %s", failed.CompletedAt)
 	}
 }
 
@@ -218,19 +263,25 @@ func deployment(name, version string, replicas int32) *appsv1.Deployment {
 	}
 }
 
-func waitComplete(ctx context.Context, t *testing.T, cs kubernetes.Interface, ns, name string) rolloutState {
+func waitComplete(ctx context.Context, t *testing.T, cs kubernetes.Interface, ns, name string) provider.Rollout {
 	t.Helper()
-	var st rolloutState
+	return waitState(ctx, t, cs, ns, name, provider.RolloutComplete)
+}
+
+func waitState(ctx context.Context, t *testing.T, cs kubernetes.Interface, ns, name string, want provider.RolloutState) provider.Rollout {
+	t.Helper()
+	p := New(cs, nil)
+	var st provider.Rollout
 	err := wait.PollUntilContextTimeout(ctx, pollInterval, pollTimeout, true, func(ctx context.Context) (bool, error) {
 		var err error
-		st, err = currentRollout(ctx, cs, ns, name)
+		st, err = p.LastRollout(ctx, provider.Service{Name: name, Namespace: ns})
 		if err != nil {
 			return false, nil // revision annotation or new replicaset not there yet
 		}
-		return st.Complete && !st.CompletedAt.IsZero(), nil
+		return st.State == want, nil
 	})
 	if err != nil {
-		t.Fatalf("rollout of %s/%s did not complete: %v (last state %+v)", ns, name, err, st)
+		t.Fatalf("rollout of %s/%s never reached %s: %v (last state %+v)", ns, name, want, err, st)
 	}
 	return st
 }

@@ -187,6 +187,55 @@ type AlertsProvider interface {
 	GetAlertDetails(ctx context.Context, alertID string) (Alert, error)
 }
 
+// RolloutState is where a rollout stands.
+type RolloutState string
+
+const (
+	RolloutInProgress RolloutState = "in_progress"
+	RolloutComplete   RolloutState = "complete"
+	// RolloutFailed means the backend has given up on the rollout, or
+	// it has exceeded its deadline: the new revision will not become
+	// available without intervention.
+	RolloutFailed RolloutState = "failed"
+)
+
+// Rollout is one change of the revision a service runs, as seen by the
+// runtime or delivery system that performs it.
+type Rollout struct {
+	Service Service
+	// Revision is the backend's identity for the rolled-out template
+	// (Kubernetes pod-template-hash, Compose config-hash). It is the
+	// value OrchestrationProvider.GetRevisionInstances takes.
+	Revision string
+	// Sequence is the human-facing revision number when the backend
+	// has one (the Kubernetes deployment.kubernetes.io/revision), empty
+	// otherwise.
+	Sequence string
+	Images   []string
+	Rollback bool
+	State    RolloutState
+	// StartedAt ends the "before" comparison window.
+	StartedAt time.Time
+	// CompletedAt starts the "after" comparison window. Zero unless
+	// State is RolloutComplete.
+	CompletedAt time.Time
+	// FailedAt and FailureReason are set when State is RolloutFailed.
+	FailedAt      time.Time
+	FailureReason string
+}
+
+// DeploymentSource reports the rollouts of services (concept 5b in
+// docs/ontology.md: what runs in production and since when, as opposed
+// to versioning's what changed in the code). It ships with a single
+// backend, kubernetes; docs/ontology.md records why that exception to
+// the two-backend rule is accepted. dockercompose joins it next.
+type DeploymentSource interface {
+	Provider
+	// LastRollout returns the service's current rollout: the one that
+	// produced the revision it runs or is moving to.
+	LastRollout(ctx context.Context, svc Service) (Rollout, error)
+}
+
 // Tracing, Security, Versioning and Correlation concepts will get their
 // own interfaces once they have at least two implementations to keep
 // honest. Until then their providers just satisfy the base Provider
