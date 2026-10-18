@@ -26,16 +26,16 @@ type fakeAPI struct {
 	labelValuesErr error
 }
 
-func (f *fakeAPI) QueryRange(_ context.Context, q string, r promv1.Range, _ ...promv1.Option) (model.Value, promv1.Warnings, error) {
+func (f *fakeAPI) QueryRange(_ context.Context, q string, r promv1.Range, _ ...promv1.Option) (model.Value, promv1.Warnings, promv1.Infos, error) {
 	f.lastQuery = q
 	f.lastRange = r
-	return f.queryResult, nil, f.queryErr
+	return f.queryResult, nil, nil, f.queryErr
 }
 
-func (f *fakeAPI) LabelValues(_ context.Context, label string, matches []string, _, _ time.Time, _ ...promv1.Option) (model.LabelValues, promv1.Warnings, error) {
+func (f *fakeAPI) LabelValues(_ context.Context, label string, matches []string, _, _ time.Time, _ ...promv1.Option) (model.LabelValues, promv1.Warnings, promv1.Infos, error) {
 	f.labelValuesCall.label = label
 	f.labelValuesCall.matches = matches
-	return f.labelValuesRet, nil, f.labelValuesErr
+	return f.labelValuesRet, nil, nil, f.labelValuesErr
 }
 
 func matrixWith(samples ...float64) model.Matrix {

@@ -30,7 +30,7 @@ func (p *Provider) GetMetric(
 	if step <= 0 {
 		step = 60 * time.Second
 	}
-	result, _, err := p.api.QueryRange(ctx, query, promv1.Range{
+	result, _, _, err := p.api.QueryRange(ctx, query, promv1.Range{
 		Start: start,
 		End:   end,
 		Step:  step,
@@ -93,7 +93,7 @@ func (p *Provider) ListAvailableMetrics(
 	// scans; metric names typically stable across that window.
 	end := time.Now()
 	start := end.Add(-24 * time.Hour)
-	values, _, err := p.api.LabelValues(ctx, "__name__", nil, start, end)
+	values, _, _, err := p.api.LabelValues(ctx, "__name__", nil, start, end)
 	if err != nil {
 		return nil, fmt.Errorf("prometheus LabelValues(__name__): %w", err)
 	}

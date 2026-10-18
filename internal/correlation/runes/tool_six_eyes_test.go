@@ -31,12 +31,12 @@ type mockResponse struct {
 	err   error
 }
 
-func (m *mockAPI) QueryRange(_ context.Context, query string, _ promv1.Range, _ ...promv1.Option) (model.Value, promv1.Warnings, error) {
+func (m *mockAPI) QueryRange(_ context.Context, query string, _ promv1.Range, _ ...promv1.Option) (model.Value, promv1.Warnings, promv1.Infos, error) {
 	if resp, ok := m.responses[query]; ok {
-		return resp.value, nil, resp.err
+		return resp.value, nil, nil, resp.err
 	}
 	// Default: return empty matrix
-	return model.Matrix{}, nil, nil
+	return model.Matrix{}, nil, nil, nil
 }
 
 // ─── Test helpers ────────────────────────────────────────────────────────────
