@@ -1,0 +1,241 @@
+package health
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Zuful/rikugan/pkg/provider"
+)
+
+type metricCall struct {
+	query      string
+	start, end time.Time
+}
+
+// fakeMetrics answers GetMetric from per-signal value functions, picked
+// by the first substring the query contains — in order, because the
+// error-rate query also contains the request-rate metric name. Values
+// are a function of the sample's time, so a seasonal query sees last
+// week's values.
+type fakeMetrics struct {
+	provider.MetricsProvider
+	values []metricValue
+	labels map[string]int // number of series to return per query substring (default 1)
+	calls  []metricCall
+}
+
+type metricValue struct {
+	match string
+	fn    func(t time.Time) float64
+}
+
+func (f *fakeMetrics) GetMetric(_ context.Context, query string, start, end time.Time, step time.Duration) ([]provider.MetricSample, error) {
+	f.calls = append(f.calls, metricCall{query, start, end})
+	for _, v := range f.values {
+		key, fn := v.match, v.fn
+		if !strings.Contains(query, key) {
+			continue
+		}
+		n := 1
+		if f.labels[key] > 0 {
+			n = f.labels[key]
+		}
+		var out []provider.MetricSample
+		for t := start; !t.After(end); t = t.Add(step) {
+			for i := 0; i < n; i++ {
+				out = append(out, provider.MetricSample{Time: t, Value: fn(t), Labels: map[string]string{"i": string(rune('a' + i))}})
+			}
+		}
+		return out, nil
+	}
+	return nil, nil
+}
+
+type fakeOrch struct {
+	provider.OrchestrationProvider
+	instances []provider.Instance
+	revision  string
+}
+
+func (f *fakeOrch) GetRevisionInstances(_ context.Context, _ provider.Service, revision string) ([]provider.Instance, error) {
+	f.revision = revision
+	return f.instances, nil
+}
+
+type fakeDeployments struct {
+	provider.DeploymentSource
+	rollout provider.Rollout
+}
+
+func (f *fakeDeployments) LastRollout(context.Context, provider.Service) (provider.Rollout, error) {
+	return f.rollout, nil
+}
+
+var svcAPI = provider.Service{Name: "api", Namespace: "prod"}
+
+func newCollector(m *fakeMetrics, r provider.Rollout, now time.Time) (*Collector, *fakeOrch) {
+	orch := &fakeOrch{instances: readyInstances(3)}
+	return &Collector{
+		Metrics:       m,
+		Orchestration: orch,
+		Deployments:   &fakeDeployments{rollout: r},
+		Now:           func() time.Time { return now },
+	}, orch
+}
+
+// busy reproduces healthy() through the default templates' metric names.
+func busy(latencyAfter float64) *fakeMetrics {
+	return &fakeMetrics{values: []metricValue{
+		{`code=~"5.."`, func(time.Time) float64 { return perMinute(1200) * 0.002 }},
+		{"http_requests_total", func(time.Time) float64 { return perMinute(1200) }},
+		{"http_request_duration_seconds", func(t time.Time) float64 {
+			if t.Before(completed) {
+				return 0.120
+			}
+			return latencyAfter
+		}},
+		{"container_cpu_usage_seconds", func(time.Time) float64 { return 0.25 }},
+		{"container_memory_working_set", func(time.Time) float64 { return 256 << 20 }},
+	}}
+}
+
+func TestCollector_CompletedRollout(t *testing.T) {
+	m := busy(0.450)
+	c, orch := newCollector(m, rollout(), minute(15).Add(10*time.Second))
+
+	r, err := c.Check(context.Background(), svcAPI)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if r.Outcome != OutcomeEvaluated || r.Checkpoint != 15*time.Minute || r.Verdict != StatusDegraded {
+		t.Fatalf("got outcome %s checkpoint %s verdict %s\n%s", r.Outcome, r.Checkpoint, r.Verdict, dump(r))
+	}
+	if lat, _ := r.Signal(SignalLatency); lat.Status != StatusDegraded {
+		t.Errorf("latency: %+v", lat)
+	}
+	if e, _ := r.Signal(SignalErrorRate); e.Status != StatusOK || !strings.Contains(e.Reason, "0.20%") {
+		t.Errorf("error rate must come from the 5xx query: %+v", e)
+	}
+	if orch.revision != "abc123" {
+		t.Errorf("instances read for revision %q, want the rollout's", orch.revision)
+	}
+
+	// Five current queries over [start-30m, completion+15m], then the
+	// seasonal request rate over the same range a week earlier.
+	if len(m.calls) != 6 {
+		t.Fatalf("got %d metric queries, want 6: %+v", len(m.calls), m.calls)
+	}
+	wantFrom, wantTo := minute(-32), minute(15)
+	for _, call := range m.calls[:5] {
+		if !call.start.Equal(wantFrom) || !call.end.Equal(wantTo) {
+			t.Errorf("query %q over [%s, %s], want [%s, %s]", call.query, call.start, call.end, wantFrom, wantTo)
+		}
+		if !strings.Contains(call.query, `namespace="prod"`) {
+			t.Errorf("query not scoped to the namespace: %s", call.query)
+		}
+	}
+	season := m.calls[5]
+	if !season.start.Equal(wantFrom.Add(-seasonalOffset)) || !strings.Contains(season.query, "http_requests_total") {
+		t.Errorf("seasonal query %+v", season)
+	}
+	if _, ok := r.Signal(SignalTraffic); !ok {
+		t.Error("traffic not evaluated")
+	}
+	if strings.Contains(strings.Join(r.Notes, " "), "seasonality guard disabled") {
+		t.Errorf("seasonal data was available: notes %q", r.Notes)
+	}
+}
+
+func TestCollector_NoMetricsWithoutAVerdict(t *testing.T) {
+	m := busy(0.120)
+	r := rollout()
+	r.State, r.CompletedAt = provider.RolloutInProgress, time.Time{}
+	c, _ := newCollector(m, r, minute(3))
+
+	rep, err := c.Check(context.Background(), svcAPI)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if rep.Outcome != OutcomeInProgress || len(m.calls) != 0 {
+		t.Fatalf("outcome %s after %d metric queries, want in_progress and none", rep.Outcome, len(m.calls))
+	}
+}
+
+func TestCollector_UnaggregatedQueryIsSkipped(t *testing.T) {
+	m := busy(0.120)
+	m.labels = map[string]int{"http_request_duration_seconds": 3}
+	c, _ := newCollector(m, rollout(), minute(15).Add(10*time.Second))
+
+	r, err := c.Check(context.Background(), svcAPI)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if lat, _ := r.Signal(SignalLatency); lat.Status != StatusNotEvaluated {
+		t.Errorf("latency from a 3-series query: %+v", lat)
+	}
+	if !strings.Contains(strings.Join(r.Notes, " "), "returned 3 series") {
+		t.Errorf("notes %q", r.Notes)
+	}
+}
+
+func TestRender_RefusesUnsafeNames(t *testing.T) {
+	tpl := DefaultTemplates().RequestRate
+	if _, err := render(tpl, templateVars{Namespace: "prod", Service: "api"}); err != nil {
+		t.Fatalf("plain names refused: %v", err)
+	}
+	for _, bad := range []templateVars{
+		{Namespace: "prod", Service: `api"} or vector(1) #`},
+		{Namespace: `prod",x="`, Service: "api"},
+		{Namespace: "prod", Service: "api", Revision: "abc|.*"},
+	} {
+		if q, err := render(tpl, bad); err == nil {
+			t.Errorf("%+v rendered to %s", bad, q)
+		}
+	}
+}
+
+func TestSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "health.yaml")
+	if err := os.WriteFile(path, []byte(`
+defaults:
+  thresholds:
+    min_requests: 100
+  templates:
+    request_rate: sum(rate(http_server_requests_seconds_count{app="{{.Service}}"}[1m]))
+services:
+  prod/checkout:
+    thresholds:
+      min_requests: 50
+      rollout_unavailable_grace: 90s
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := LoadSettings(path)
+	if err != nil {
+		t.Fatalf("LoadSettings: %v", err)
+	}
+
+	cfg, tpl := s.For(provider.Service{Namespace: "prod", Name: "api"})
+	if cfg.MinRequests != 100 || cfg.RolloutUnavailableGrace != 60*time.Second {
+		t.Errorf("defaults section not applied alone: %+v", cfg)
+	}
+	if !strings.Contains(tpl.RequestRate, "http_server_requests_seconds_count") || tpl.ErrorRate != DefaultTemplates().ErrorRate {
+		t.Errorf("templates: %+v", tpl)
+	}
+
+	cfg, _ = s.For(provider.Service{Namespace: "prod", Name: "checkout"})
+	if cfg.MinRequests != 50 || cfg.RolloutUnavailableGrace != 90*time.Second || cfg.UnavailableGrace != 2*time.Minute {
+		t.Errorf("service section: %+v", cfg)
+	}
+
+	if err := os.WriteFile(path, []byte("defaults:\n  thresholds:\n    min_request: 100\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadSettings(path); err == nil {
+		t.Error("a misspelled key must be rejected, not silently ignored")
+	}
+}

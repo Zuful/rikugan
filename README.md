@@ -404,6 +404,44 @@ The correlation engine. Combines pod diagnostics with targeted Prometheus querie
 
 Findings are sorted by severity, followed by pod summary, events, and raw metric data. Available only in the unified `rikugan` binary — runes spans the Orchestration and Metrics concepts simultaneously and intentionally does not fit a single per-concept binary.
 
+#### `check_deploy_health`  *(deploy health — cross-concept tool, unified binary only)*
+
+Did the service's last rollout break something? Reads the Deployments, Orchestration and Metrics concepts through their interfaces; the rules live in the pure `internal/health` package.
+
+| Parameter   | Type   | Required | Description                         |
+|-------------|--------|----------|-------------------------------------|
+| `name`      | string | yes      | Service (Deployment) name.          |
+| `namespace` | string | yes      | Kubernetes namespace.               |
+
+The minutes after the rollout completed — up to the latest checkpoint reached, +5, +15 or +30 min — are compared with the 30 minutes before it started:
+
+| Signal | Investigate | Degraded |
+|---|---|---|
+| Latency p95 | +30 % and +50 ms | +100 % and +200 ms |
+| 5xx rate | ×2, > 1 %, ≥ 10 errors | ×2, > 5 %, ≥ 25 errors |
+| Restarts (new revision) | 1 restart | attested OOM kill, crash loop, or ≥ 2 restarts |
+| Availability | — | an instance unready past its grace (60 s for the rollout's own, 2 min for later ones) |
+| Saturation (per replica, from +15) | +40 % | +100 % |
+| Traffic | off by −50 % / +200 % against both the before window and a week earlier, or collapsed | — |
+
+Latency and error rate are only evaluated with at least 200 requests in each window; below that the verdict is `insufficient_data` unless another signal fires. A stalled rollout (Kubernetes `ProgressDeadlineExceeded`) is `degraded`. A rollout still in progress or completed under 5 minutes ago gets no verdict, but its new revision's restarts and readiness are reported; one completed over 2 hours ago gets no verdict.
+
+Requires `ORCHESTRATION_PROVIDER=kubernetes` (rollout detection is Kubernetes-only for now) and a metrics backend. The default PromQL templates assume `http_requests_total` / `http_request_duration_seconds` with `namespace` and `service` labels, and cAdvisor container metrics. Thresholds and templates can be overridden per service with a YAML file named by `RIKUGAN_HEALTH_CONFIG`:
+
+```yaml
+defaults:
+  thresholds:
+    min_requests: 100
+  templates:
+    request_rate: sum(rate(http_server_requests_seconds_count{namespace="{{.Namespace}}",app="{{.Service}}"}[1m]))
+services:
+  prod/checkout:
+    thresholds:
+      rollout_unavailable_grace: 90s
+```
+
+Templates are Go templates over `{{.Namespace}}`, `{{.Service}}` and `{{.Revision}}`, written in the metrics backend's query language, and must return one aggregated series. Unknown keys in the file are rejected.
+
 ## Getting Started
 
 ### Prerequisites
