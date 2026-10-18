@@ -1,0 +1,9 @@
+# kind cluster for the end-to-end test: Prometheus's NodePort is mapped
+# to the host so the test, running on the host, can query it.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30090
+        hostPort: 30090

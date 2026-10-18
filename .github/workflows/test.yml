@@ -68,3 +68,34 @@ jobs:
 
       - name: Run integration tests
         run: go test -tags integration -run Integration -v -count=1 ./...
+
+  e2e:
+    name: E2E (kind + Prometheus)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: stable
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: e2e
+          config: test/e2e/kind.yaml
+
+      - name: Build and load the test workload
+        run: |
+          docker build -f test/e2e/app/Dockerfile -t rikugan-e2e-app:test .
+          kind load docker-image rikugan-e2e-app:test --name e2e
+
+      - name: Deploy Prometheus
+        run: |
+          kubectl apply -f test/e2e/prometheus.yaml
+          kubectl -n monitoring rollout status deployment/prometheus --timeout=180s
+
+      - name: Run the end-to-end test
+        run: go test -tags e2e -v -count=1 -timeout 20m ./test/e2e/
