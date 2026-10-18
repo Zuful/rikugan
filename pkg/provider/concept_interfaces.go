@@ -190,9 +190,14 @@ type AlertsProvider interface {
 // RolloutState is where a rollout stands.
 type RolloutState string
 
+// Rollout states.
 const (
+	// RolloutInProgress means the new revision is not fully available
+	// yet and the backend is still waiting for it.
 	RolloutInProgress RolloutState = "in_progress"
-	RolloutComplete   RolloutState = "complete"
+	// RolloutComplete means every instance runs the new revision and is
+	// available.
+	RolloutComplete RolloutState = "complete"
 	// RolloutFailed means the backend has given up on the rollout, or
 	// it has exceeded its deadline: the new revision will not become
 	// available without intervention.

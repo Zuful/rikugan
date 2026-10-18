@@ -175,10 +175,15 @@ func TestIntegration_StalledRolloutIsFailed(t *testing.T) {
 	// on: the new ReplicaSet's pod runs and never becomes ready.
 	patch(ctx, t, cs, ns, name, `{"spec":{"template":{"spec":{"containers":[{"name":"app","readinessProbe":{"httpGet":{"path":"/","port":9999}}}]}}}}`)
 
-	inProgress := waitState(ctx, t, cs, ns, name, provider.RolloutInProgress)
+	// Until the controller creates the new ReplicaSet, the Deployment's
+	// generation is ahead of what it has observed, so the previous
+	// revision briefly reads in progress. Wait for the new one.
+	inProgress := waitFor(ctx, t, cs, ns, name, "the new revision in progress", func(r provider.Rollout) bool {
+		return r.State == provider.RolloutInProgress && r.Sequence != good.Sequence
+	})
 	t.Logf("while stalling: %+v", inProgress)
-	if inProgress.Sequence == good.Sequence || !inProgress.CompletedAt.IsZero() {
-		t.Errorf("in-progress rollout should be a new revision with no completion time: %+v", inProgress)
+	if !inProgress.CompletedAt.IsZero() {
+		t.Errorf("in-progress rollout has a completion time: %+v", inProgress)
 	}
 
 	failed := waitState(ctx, t, cs, ns, name, provider.RolloutFailed)
@@ -270,6 +275,11 @@ func waitComplete(ctx context.Context, t *testing.T, cs kubernetes.Interface, ns
 
 func waitState(ctx context.Context, t *testing.T, cs kubernetes.Interface, ns, name string, want provider.RolloutState) provider.Rollout {
 	t.Helper()
+	return waitFor(ctx, t, cs, ns, name, string(want), func(r provider.Rollout) bool { return r.State == want })
+}
+
+func waitFor(ctx context.Context, t *testing.T, cs kubernetes.Interface, ns, name, what string, done func(provider.Rollout) bool) provider.Rollout {
+	t.Helper()
 	p := New(cs, nil)
 	var st provider.Rollout
 	err := wait.PollUntilContextTimeout(ctx, pollInterval, pollTimeout, true, func(ctx context.Context) (bool, error) {
@@ -278,10 +288,10 @@ func waitState(ctx context.Context, t *testing.T, cs kubernetes.Interface, ns, n
 		if err != nil {
 			return false, nil // revision annotation or new replicaset not there yet
 		}
-		return st.State == want, nil
+		return done(st), nil
 	})
 	if err != nil {
-		t.Fatalf("rollout of %s/%s never reached %s: %v (last state %+v)", ns, name, want, err, st)
+		t.Fatalf("rollout of %s/%s never reached %s: %v (last state %+v)", ns, name, what, err, st)
 	}
 	return st
 }
