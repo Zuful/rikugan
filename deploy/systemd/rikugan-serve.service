@@ -1,0 +1,46 @@
+# rikugan serve as a systemd service, for hosts without Kubernetes.
+#
+#   install -m 0755 rikugan /usr/local/bin/rikugan
+#   useradd --system --no-create-home --shell /usr/sbin/nologin rikugan
+#   install -d -m 0750 /etc/rikugan
+#   install -m 0640 -g rikugan deploy/systemd/serve.env.example /etc/rikugan/serve.env   # then edit it
+#   install -m 0644 deploy/systemd/rikugan-serve.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now rikugan-serve
+#
+# A plain unit, not a template (rikugan-serve@): rikugan serve runs as a
+# single instance, always (design §1). StateDirectory gives it
+# /var/lib/rikugan, on local disk.
+[Unit]
+Description=rikugan serve: post-deploy health checks and periodic sweep
+Documentation=https://github.com/Zuful/rikugan
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rikugan
+Group=rikugan
+# Docker Compose watching reads the Docker socket: uncomment, knowing
+# that access to the socket is root on the host.
+#SupplementaryGroups=docker
+EnvironmentFile=/etc/rikugan/serve.env
+Environment=RIKUGAN_STATE_DIR=/var/lib/rikugan
+StateDirectory=rikugan
+StateDirectoryMode=0700
+ExecStart=/usr/local/bin/rikugan serve
+Restart=on-failure
+RestartSec=10s
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target
