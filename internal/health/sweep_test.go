@@ -77,6 +77,17 @@ func TestEvaluateSweep(t *testing.T) {
 			noteSubstr: "the same hour one week earlier",
 		},
 		{
+			name: "no request metric at all, error query padded with vector(0): error rate never 0%",
+			in: func() SweepInputs {
+				s := steady()
+				s.RequestRate = nil
+				s.ErrorRate = ago(flat(0))
+				return sweepIn(s, baselineOf(s))
+			},
+			verdict: StatusInsufficientData,
+			signals: map[string]Status{SignalErrorRate: StatusInsufficientData},
+		},
+		{
 			name: "a dependency went down: 5xx 0.2% one week earlier, 8% in the last hour",
 			in: func() SweepInputs {
 				cur := steady()

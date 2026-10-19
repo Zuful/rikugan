@@ -269,21 +269,32 @@ func latencySignal(cfg Config, s Signals, before, after window, vol volumeCheck,
 func errorRateSignal(cfg Config, s Signals, before, after window, vol volumeCheck, cp time.Duration) SignalResult {
 	res := SignalResult{Name: SignalErrorRate}
 	if !vol.ok {
-		return bluntErrorRule(cfg, s, after, vol, cp)
+		return bluntErrorRule(cfg, s, before, after, vol, cp)
 	}
-	// Prometheus has no 5xx series at all until a first 5xx is served,
-	// so a service without errors before the rollout has no error data
-	// in the before window. With data in the other window, the missing
-	// one means no errors, not an unknown rate; otherwise the commonest
-	// regression, from zero errors, would go unevaluated.
 	eb, okB := before.count(s.ErrorRate)
 	ea, okA := after.count(s.ErrorRate)
 	if !okB && !okA {
 		res.Status, res.Reason = StatusNotEvaluated, "no error-rate data"
 		return res
 	}
+	// Prometheus has no 5xx series at all until a first 5xx is served.
+	// A window without error data while the other has some is read as
+	// zero errors, and the report says so. Before the rollout this is
+	// the safe direction: it makes a regression from zero errors
+	// visible. After it, it would hide one if the target were not
+	// scraped, so it also needs the request series in the after window,
+	// which the volume guard has already required: the target is scraped
+	// and instrumented. A rollout renaming the status label or the error
+	// metric still reads as zero errors after it (README).
+	var zero string
+	switch {
+	case !okB:
+		zero = "; 0 errors before: no 5xx series before the rollout"
+	case !okA:
+		zero = "; 0 errors after: no 5xx series after the rollout"
+	}
 	rb, ra := eb/vol.before, ea/vol.after
-	res.Reason = fmt.Sprintf("5xx %.2f%% → %.2f%% (%.0f errors after)", rb*100, ra*100, ea)
+	res.Reason = fmt.Sprintf("5xx %.2f%% → %.2f%% (%.0f errors after)%s", rb*100, ra*100, ea, zero)
 	grew := ra >= cfg.ErrorRatio*rb && ra > 0
 	switch {
 	case grew && ra > cfg.ErrorDegradedRate && ea >= cfg.ErrorDegradedMinErr:
@@ -301,7 +312,11 @@ func errorRateSignal(cfg Config, s Signals, before, after window, vol volumeChec
 // regression; anything subtler waits for the last checkpoint, whose
 // window holds the most requests. The before window plays no part: with
 // so few requests, a ratio to it would mean little.
-func bluntErrorRule(cfg Config, s Signals, after window, vol volumeCheck, cp time.Duration) SignalResult {
+//
+// The before window only vetoes it: a service already above the blunt
+// threshold before the rollout would otherwise get a critical at every
+// deploy, for errors the deploy did not cause.
+func bluntErrorRule(cfg Config, s Signals, before, after window, vol volumeCheck, cp time.Duration) SignalResult {
 	res := SignalResult{Name: SignalErrorRate, Status: StatusInsufficientData, Reason: vol.reason}
 	if !cfg.BluntRule || cp >= Checkpoints[len(Checkpoints)-1] || vol.after <= 0 {
 		return res
@@ -309,6 +324,13 @@ func bluntErrorRule(cfg Config, s Signals, after window, vol volumeCheck, cp tim
 	ea, ok := after.count(s.ErrorRate)
 	if !ok {
 		return res
+	}
+	if vol.before > 0 {
+		eb, _ := before.count(s.ErrorRate) // no 5xx series before: zero errors
+		if rb := eb / vol.before; rb > cfg.BluntErrorRate {
+			res.Reason += fmt.Sprintf("; blunt rule not applied: 5xx already %.1f%% before the rollout", rb*100)
+			return res
+		}
 	}
 	ra := ea / vol.after
 	if ra > cfg.BluntErrorRate && ea >= cfg.BluntErrorMinErr {
