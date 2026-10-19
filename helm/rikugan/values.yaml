@@ -20,3 +20,45 @@ serviceAccount:
 
 rbac:
   create: true
+
+# rikugan serve: the proactive mode's daemon. It follows the rollouts of
+# the watched namespaces, checks them at +5/+15/+30 min, runs a periodic
+# sweep, notifies the team and serves the verdicts API.
+serve:
+  enabled: false
+  # Namespaces whose rollouts are watched and swept. Empty: the release
+  # namespace. Each one gets a Role and RoleBinding (read-only).
+  namespaces: []
+  # Verdicts API. The daemon listens on every interface so the Service can
+  # reach it, which requires a token: generated once into the Secret
+  # <release>-rikugan-serve (key "token") and kept across upgrades.
+  auth:
+    # Name of a Secret, managed outside the chart, holding the token under
+    # the key "token". REQUIRED with GitOps (Argo CD, Flux): they render
+    # the chart without cluster access, so the generated token would
+    # change on every sync.
+    existingSecret: ""
+  service:
+    port: 8080
+  persistence:
+    # The journal of verdicts. ReadWriteOnce on a block volume: the state
+    # directory must not live on NFS (the lock is unreliable there).
+    size: 1Gi
+    storageClass: ""
+    existingClaim: ""
+  # Notification channels and other settings, as environment variables
+  # (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, SLACK_WEBHOOK_URL,
+  # RIKUGAN_SWEEP_INTERVAL, ALERTMANAGER_URL…). Put credentials in a
+  # Secret and reference it through envFrom.
+  env: []
+  envFrom: []
+  # Per-service thresholds and query templates, mounted as the file named
+  # by RIKUGAN_HEALTH_CONFIG. Empty: the defaults.
+  healthConfig: ""
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi

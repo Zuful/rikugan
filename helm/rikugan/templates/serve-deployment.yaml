@@ -1,0 +1,104 @@
+{{- if .Values.serve.enabled }}
+# rikugan serve runs as a single instance, always (design §1): the
+# journal admits one writer, and two daemons would notify twice.
+# replicas is therefore not a value, and the strategy is Recreate: a
+# rolling update would start the new pod before stopping the old one.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "rikugan.serveName" . }}
+  labels:
+    {{- include "rikugan.labels" . | nindent 4 }}
+    app.kubernetes.io/component: serve
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "rikugan.serveSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "rikugan.labels" . | nindent 8 }}
+        app.kubernetes.io/component: serve
+      annotations:
+        checksum/health-config: {{ .Values.serve.healthConfig | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "rikugan.serveName" . }}
+      # The image's user is "nonroot" by name, which the kubelet cannot
+      # check against runAsNonRoot: the numeric id must be given.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+      containers:
+        - name: serve
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["serve"]
+          ports:
+            - name: api
+              containerPort: 8080
+          env:
+            - name: RIKUGAN_SERVE_LISTEN
+              value: "0.0.0.0:8080"
+            - name: RIKUGAN_SERVE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "rikugan.serveSecretName" . }}
+                  key: token
+            - name: RIKUGAN_STATE_DIR
+              value: /var/lib/rikugan
+            - name: RIKUGAN_SERVE_NAMESPACES
+              value: {{ include "rikugan.serveNamespaces" . | quote }}
+            {{- if .Values.prometheus.url }}
+            - name: PROMETHEUS_URL
+              value: {{ .Values.prometheus.url | quote }}
+            {{- end }}
+            {{- if .Values.serve.healthConfig }}
+            - name: RIKUGAN_HEALTH_CONFIG
+              value: /etc/rikugan/health.yaml
+            {{- end }}
+            {{- with .Values.serve.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.serve.envFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: api
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: api
+            initialDelaySeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: state
+              mountPath: /var/lib/rikugan
+            {{- if .Values.serve.healthConfig }}
+            - name: health-config
+              mountPath: /etc/rikugan
+              readOnly: true
+            {{- end }}
+          resources:
+            {{- toYaml .Values.serve.resources | nindent 12 }}
+      volumes:
+        - name: state
+          persistentVolumeClaim:
+            claimName: {{ .Values.serve.persistence.existingClaim | default (include "rikugan.serveName" .) }}
+        {{- if .Values.serve.healthConfig }}
+        - name: health-config
+          configMap:
+            name: {{ include "rikugan.serveName" . }}
+        {{- end }}
+{{- end }}

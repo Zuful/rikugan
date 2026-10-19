@@ -1,0 +1,116 @@
+{{- if .Values.serve.enabled }}
+{{- if not .Values.serve.persistence.existingClaim }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "rikugan.serveName" . }}
+  labels:
+    {{- include "rikugan.labels" . | nindent 4 }}
+    app.kubernetes.io/component: serve
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with .Values.serve.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.serve.persistence.size }}
+---
+{{- end }}
+{{- if not .Values.serve.auth.existingSecret }}
+{{- $name := include "rikugan.serveSecretName" . }}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $name }}
+# The token is generated once and kept: lookup returns the Secret
+# already in the cluster, so helm upgrade does not change it. lookup is
+# empty when the chart is rendered without cluster access (helm template,
+# Argo CD, Flux): use serve.auth.existingSecret there.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "rikugan.labels" . | nindent 4 }}
+    app.kubernetes.io/component: serve
+type: Opaque
+data:
+  {{- if and $existing $existing.data $existing.data.token }}
+  token: {{ $existing.data.token }}
+  {{- else }}
+  token: {{ randAlphaNum 48 | b64enc }}
+  {{- end }}
+---
+{{- end }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "rikugan.serveName" . }}
+  labels:
+    {{- include "rikugan.labels" . | nindent 4 }}
+    app.kubernetes.io/component: serve
+spec:
+  selector:
+    {{- include "rikugan.serveSelectorLabels" . | nindent 4 }}
+  ports:
+    - name: api
+      port: {{ .Values.serve.service.port }}
+      targetPort: api
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "rikugan.serveName" . }}
+  labels:
+    {{- include "rikugan.labels" . | nindent 4 }}
+    app.kubernetes.io/component: serve
+{{- if .Values.serve.healthConfig }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "rikugan.serveName" . }}
+  labels:
+    {{- include "rikugan.labels" . | nindent 4 }}
+    app.kubernetes.io/component: serve
+data:
+  health.yaml: |
+    {{- .Values.serve.healthConfig | nindent 4 }}
+{{- end }}
+{{- $namespaces := .Values.serve.namespaces | default (list .Release.Namespace) }}
+{{- range $ns := $namespaces }}
+---
+# Read-only access to what rikugan serve watches in {{ $ns }}: rollouts
+# (Deployments, ReplicaSets), their instances (Pods) and events.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "rikugan.serveName" $ }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "rikugan.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: serve
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods", "events"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "rikugan.serveName" $ }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "rikugan.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: serve
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "rikugan.serveName" $ }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "rikugan.serveName" $ }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+{{- end }}

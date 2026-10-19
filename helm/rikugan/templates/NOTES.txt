@@ -1,3 +1,29 @@
+{{- if .Values.serve.enabled }}
+{{- if not .Values.serve.auth.existingSecret }}
+GitOps (Argo CD, Flux): set serve.auth.existingSecret. Without it, the token is regenerated on every sync, because lookup does not see the cluster when the chart is rendered.
+
+{{- end }}
+rikugan serve deployed (single instance, Recreate strategy).
+
+Watched namespaces: {{ include "rikugan.serveNamespaces" . }}
+Verdicts API: service {{ include "rikugan.serveName" . }}, port {{ .Values.serve.service.port }} (bearer token required)
+{{- if not .Values.prometheus.url }}
+WARNING: prometheus.url is not set; rikugan serve needs a metrics backend and will not start.
+{{- end }}
+
+To read the verdicts from an MCP server outside the cluster (get_watch_reports):
+
+  # 1. Get the token
+  export RIKUGAN_SERVE_TOKEN=$(kubectl get secret {{ include "rikugan.serveSecretName" . }} -n {{ .Release.Namespace }} \
+    -o jsonpath='{.data.token}' | base64 -d)
+
+  # 2. Reach the API
+  kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "rikugan.serveName" . }} 8080:{{ .Values.serve.service.port }} &
+  export RIKUGAN_SERVE_URL=http://127.0.0.1:8080
+
+Put both variables in the env section of the MCP client configuration. To rotate the token, delete the Secret and run helm upgrade.
+
+{{ end -}}
 Rikugan MCP server deployed.
 
 Transport: STDIO (stdin/stdout)
