@@ -64,7 +64,7 @@ func (f *fakeChecker) CheckRollout(_ context.Context, r provider.Rollout, opts h
 	if f.fail {
 		return health.Report{}, errors.New("prometheus unreachable")
 	}
-	f.calls = append(f.calls, call{r.Sequence, opts.Checkpoint, opts.BeforeEnd})
+	f.calls = append(f.calls, call{r.Label(), opts.Checkpoint, opts.BeforeEnd})
 	v := f.verdict
 	if v == "" {
 		v = health.StatusOK
@@ -433,15 +433,39 @@ func TestRunFollowsEventsAndCheckpoints(t *testing.T) {
 }
 
 func TestNewerPrefersStartTimesOverRevisionNumbers(t *testing.T) {
-	// Compose revisions are config-hashes: a short hash made of digits
-	// only must not be compared as a number.
-	older := provider.Rollout{Sequence: "900000000000", StartedAt: t0}
-	later := provider.Rollout{Sequence: "100000000000", StartedAt: t0.Add(time.Minute)}
+	// Compose numbers no revision: a config-hash made of digits only is
+	// a Revision, never compared as a number.
+	older := provider.Rollout{Revision: "900000000000aa", StartedAt: t0}
+	later := provider.Rollout{Revision: "100000000000bb", StartedAt: t0.Add(time.Minute)}
 	if !newer(later, older) || newer(older, later) {
 		t.Error("start times must decide")
 	}
 	// A skipped revision is known by its number only.
 	if !newer(provider.Rollout{Sequence: "4"}, provider.Rollout{Sequence: "3", StartedAt: t0}) {
 		t.Error("revision numbers decide without a start time")
+	}
+}
+
+// Compose rollouts have no Sequence: the daemon tells them apart by
+// their revision, and records them under its short form.
+func TestRolloutsWithoutSequence(t *testing.T) {
+	h := newHarness(t)
+	compose := func(hash string, started, done time.Duration) provider.Rollout {
+		return provider.Rollout{Service: api, Revision: "sha256:" + hash, State: provider.RolloutComplete,
+			StartedAt: t0.Add(started), CompletedAt: t0.Add(done)}
+	}
+	a := compose("aaaaaaaaaaaa1111", 0, time.Minute)
+	b := compose("bbbbbbbbbbbb2222", 10*time.Minute, 11*time.Minute)
+	h.source.current = a
+	h.at(time.Minute).handle(a)
+	h.at(6 * time.Minute).due()
+	h.source.current = b
+	h.at(11 * time.Minute).handle(b)
+	h.at(16 * time.Minute).due()
+	if got := h.checker.seen(); got != "aaaaaaaaaaaa@5m0s bbbbbbbbbbbb@5m0s" {
+		t.Errorf("checks %q", got)
+	}
+	if n := h.count(`"superseded by revision bbbbbbbbbbbb"`); n != 2 {
+		t.Errorf("%d checkpoints of the first rollout superseded by the second, want 2\n%s", n, strings.Join(h.records(), "\n"))
 	}
 }

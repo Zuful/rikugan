@@ -8,6 +8,7 @@ set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 work=$(mktemp -d)
 file="$root/deploy/compose/compose.yaml"
+proxy="$root/deploy/compose/compose.socket-proxy.yaml"
 export WATCHED_PROJECT=rikugan-smoke-demo
 export PROMETHEUS_URL=http://127.0.0.1:9   # nothing listens: checks fail, start-up must not
 export RIKUGAN_SERVE_TOKEN=smoke-token
@@ -22,13 +23,14 @@ services:
 YAML
 
 cleanup() {
-  docker compose -f "$file" down -v -t 0 >/dev/null 2>&1 || true
+  docker compose -f "$file" -f "$proxy" down -v -t 0 >/dev/null 2>&1 || true
   docker compose -p "$WATCHED_PROJECT" -f "$work/demo.yaml" down -t 0 >/dev/null 2>&1 || true
   rm -rf "$work"
 }
 diagnose() {
   echo "--- rikugan-serve logs" >&2
   docker logs rikugan-serve >&2 || true
+  docker logs rikugan-socket-proxy >&2 || true
   docker ps -a >&2 || true
 }
 trap cleanup EXIT
@@ -53,9 +55,41 @@ logs=$(docker logs rikugan-serve 2>&1)
 grep -q '"rikugan serve starting"' <<<"$logs" || { echo "no start line" >&2; exit 1; }
 grep -q "\"namespaces\":\"$WATCHED_PROJECT\"" <<<"$logs" || { echo "not watching $WATCHED_PROJECT" >&2; exit 1; }
 
+# The daemon reads the watched project: its rollout is in the journal.
+sees_demo() {
+  for _ in $(seq 60); do
+    if docker exec rikugan-serve cat /var/lib/rikugan/verdicts.jsonl 2>/dev/null | grep -q '"kind":"rollout".*"name":"web"'; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "$1: no rollout of $WATCHED_PROJECT/web in the journal" >&2
+  docker exec rikugan-serve cat /var/lib/rikugan/verdicts.jsonl >&2 || true
+  return 1
+}
+sees_demo "direct socket"
+
 if docker compose -f "$file" up -d --scale rikugan-serve=2 >/dev/null 2>&1; then
   echo "a second instance started: container_name must prevent it" >&2
   exit 1
 fi
 
-echo "compose smoke test passed: serve healthy, watching $WATCHED_PROJECT, token required, single instance"
+# Behind the read-only socket proxy: same, without the socket mounted.
+docker compose -f "$file" down -v -t 0
+docker compose -f "$file" -f "$proxy" up -d
+for _ in $(seq 60); do
+  if curl -fsS "$api/healthz" >/dev/null 2>&1; then break; fi
+  sleep 1
+done
+curl -fsS "$api/healthz" >/dev/null
+if docker inspect rikugan-serve --format '{{range .Mounts}}{{.Source}} {{end}}' | grep -q docker.sock; then
+  echo "the socket is still mounted into the daemon" >&2
+  exit 1
+fi
+sees_demo "socket proxy"
+if docker exec rikugan-serve docker run --rm busybox:1.36 true >/dev/null 2>&1; then
+  echo "the proxy let a write through" >&2
+  exit 1
+fi
+
+echo "compose smoke test passed: serve healthy, watching $WATCHED_PROJECT, token required, single instance, read-only socket proxy"

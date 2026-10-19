@@ -18,7 +18,7 @@ func rollout(seq string, state provider.RolloutState) provider.Rollout {
 func events(rs []provider.Rollout) string {
 	var out []string
 	for _, r := range rs {
-		out = append(out, r.Sequence+":"+string(r.State))
+		out = append(out, r.Label()+":"+string(r.State))
 	}
 	return strings.Join(out, " ")
 }
@@ -93,5 +93,25 @@ func TestTrackerSkippedCarriesOnlyWhatIsKnown(t *testing.T) {
 	got := tr.Observe("prod/api", rollout("4", provider.RolloutInProgress))
 	if len(got) != 1 || got[0].Sequence != "3" || got[0].Revision != "" || got[0].Service.Name != "api" {
 		t.Errorf("skipped rollout: %+v", got)
+	}
+}
+
+// Compose numbers no revision: rollouts are told apart by revision, and
+// no revision is ever reported skipped.
+func TestTrackerWithoutSequence(t *testing.T) {
+	tr := New()
+	compose := func(hash string, state provider.RolloutState) provider.Rollout {
+		return provider.Rollout{Service: svc(), Revision: hash, State: state}
+	}
+	var got []string
+	for _, r := range []provider.Rollout{
+		compose("aaaa", provider.RolloutInProgress),
+		compose("bbbb", provider.RolloutInProgress),
+		compose("bbbb", provider.RolloutComplete),
+	} {
+		got = append(got, events(tr.Observe("prod/api", r)))
+	}
+	if want := []string{"", "aaaa:superseded", "bbbb:complete"}; strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("events %q, want %q", got, want)
 	}
 }

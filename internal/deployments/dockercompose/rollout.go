@@ -109,8 +109,9 @@ func (p *Provider) Tools() []provider.ToolDefinition { return nil }
 // (healthy, or running without a healthcheck) and no container of an
 // older revision is still running; CompletedAt is when the last of them
 // became ready. Past compose_rollout_deadline without that, the rollout
-// is failed. Compose keeps no history, so Rollback is never set and
-// Sequence is the short form of the config-hash.
+// is failed. Compose keeps no history and numbers no revision, so
+// Rollback is never set and Sequence is empty: Label shows the short
+// config-hash.
 func (p *Provider) LastRollout(ctx context.Context, svc provider.Service) (provider.Rollout, error) {
 	revs, err := p.compose.Revisions(ctx, svc)
 	if err != nil {
@@ -123,7 +124,6 @@ func (p *Provider) LastRollout(ctx context.Context, svc provider.Service) (provi
 	r := provider.Rollout{
 		Service:   svc,
 		Revision:  cur.Hash,
-		Sequence:  orchdc.ShortHash(cur.Hash),
 		State:     provider.RolloutInProgress,
 		StartedAt: cur.Created,
 	}
@@ -137,7 +137,7 @@ func (p *Provider) LastRollout(ctx context.Context, svc provider.Service) (provi
 	switch {
 	case cur.Containers > 0 && cur.Ready == cur.Containers && oldLive == 0 && !cur.ReadyAt.IsZero():
 		r.State = provider.RolloutComplete
-		r.CompletedAt = cur.ReadyAt
+		r.CompletedAt, r.CompletedAtEstimated = cur.ReadyAt, cur.ReadyAtEstimated
 		if r.CompletedAt.Before(r.StartedAt) {
 			r.CompletedAt = r.StartedAt
 		}

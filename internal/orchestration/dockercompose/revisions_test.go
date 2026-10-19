@@ -62,11 +62,40 @@ func TestRevisionsNotAllReady(t *testing.T) {
 	}
 }
 
-func TestShortHash(t *testing.T) {
-	if got := ShortHash("sha256:0123456789abcdef0123"); got != "0123456789ab" {
-		t.Errorf("%q", got)
+// Docker keeps the last 5 probes. A log full of passing probes has lost
+// the start of the run: the container's start stands in for it, so the
+// time does not move from one call to the next.
+func TestReadyAtWithATruncatedHealthLog(t *testing.T) {
+	probes := func(starts ...string) string {
+		var out []string
+		for _, s := range starts {
+			out = append(out, `{"Start":"2026-10-18T10:`+s+`Z","ExitCode":0}`)
+		}
+		return `{"Status":"running","Running":true,"StartedAt":"2026-10-18T10:00:05Z","FinishedAt":"0001-01-01T00:00:00Z",
+	"Health":{"Status":"healthy","FailingStreak":0,"Log":[` + strings.Join(out, ",") + `]}}`
 	}
-	if got := ShortHash("abc"); got != "abc" {
-		t.Errorf("%q", got)
+	for _, tc := range []struct {
+		name      string
+		state     string
+		want      string
+		estimated bool
+	}{
+		{"four passing probes, nothing lost", probes("00:30", "01:00", "01:30", "02:00"), "10:00:30", false},
+		{"five passing probes: the first may be lost", probes("01:00", "01:30", "02:00", "02:30", "03:00"), "10:00:05", true},
+		{"same, two probes later: the time does not move", probes("02:00", "02:30", "03:00", "03:30", "04:00"), "10:00:05", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &inspectRunner{
+				ps:       psLine("n1", "web-api-1", "api"),
+				inspects: map[string]string{"n1": inspectJSON("n1", "web-api-1", "2026-10-18T10:00:00Z", "new", 0, tc.state)},
+			}
+			revs, err := New(WithRunner(r)).Revisions(context.Background(), provider.Service{Name: "api", Namespace: "web"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := revs[0].ReadyAt.Format("15:04:05"); got != tc.want || revs[0].ReadyAtEstimated != tc.estimated {
+				t.Errorf("ReadyAt %s (estimated %v), want %s (estimated %v)", got, revs[0].ReadyAtEstimated, tc.want, tc.estimated)
+			}
+		})
 	}
 }

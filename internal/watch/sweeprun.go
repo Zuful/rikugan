@@ -213,7 +213,7 @@ func (d *Daemon) sweepService(ctx context.Context, svc provider.Service) error {
 	}
 	next, note := sweep.Step(st.state, rep.Verdict, d.Sweep.State)
 
-	rec := sweepRecord{Revision: rep.Rollout.Sequence, Outcome: string(rep.Outcome), Verdict: string(rep.Verdict),
+	rec := sweepRecord{Revision: rep.Rollout.Label(), Outcome: string(rep.Outcome), Verdict: string(rep.Verdict),
 		Notes: rep.Notes, State: next, Restarts: counts}
 	for _, s := range rep.Signals {
 		rec.Signals = append(rec.Signals, Signal{Name: s.Name, Status: string(s.Status), Reason: s.Reason})

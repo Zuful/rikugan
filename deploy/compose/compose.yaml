@@ -13,9 +13,11 @@
 #
 # Security: the daemon reads containers through the Docker socket, and
 # access to the socket is root on the host. It only runs read commands
-# (compose ps, inspect, events); a socket proxy that allows just those
-# (containers and events, read-only) narrows what a compromised daemon
-# could do.
+# (compose ps, inspect, events); compose.socket-proxy.yaml puts it behind
+# a proxy that allows just those (containers and events, no write),
+# which narrows what a compromised daemon could do:
+#
+#   docker compose -f compose.yaml -f compose.socket-proxy.yaml up -d
 name: rikugan
 
 services:

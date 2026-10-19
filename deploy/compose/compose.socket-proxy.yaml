@@ -1,0 +1,32 @@
+# Optional: rikugan serve behind a read-only Docker socket proxy.
+#
+#   docker compose -f deploy/compose/compose.yaml -f deploy/compose/compose.socket-proxy.yaml up -d
+#
+# The daemon only reads: it lists and inspects containers (compose ps,
+# docker inspect) and follows events. The proxy allows exactly that and
+# refuses every write (POST=0): a compromised daemon could no longer
+# start, stop or exec into containers, which the raw socket allows, as
+# root on the host. Only the proxy mounts the socket, read-only.
+services:
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy:v0.5.0
+    container_name: rikugan-socket-proxy
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1 # list and inspect containers
+      EVENTS: 1
+      POST: 0 # no write of any kind
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    read_only: true
+    tmpfs:
+      - /run
+
+  rikugan-serve:
+    depends_on:
+      - socket-proxy
+    environment:
+      DOCKER_HOST: tcp://socket-proxy:2375
+    # The socket is no longer mounted into the daemon.
+    volumes: !override
+      - rikugan-state:/var/lib/rikugan

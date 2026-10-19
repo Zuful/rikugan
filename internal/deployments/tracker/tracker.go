@@ -48,7 +48,7 @@ func (t *Tracker) Keys() []string {
 func (t *Tracker) Observe(key string, r provider.Rollout) []provider.Rollout {
 	var out []provider.Rollout
 	prev, seen := t.last[key]
-	if seen && prev.rollout.Sequence != r.Sequence {
+	if seen && prev.rollout.Label() != r.Label() {
 		if !prev.ended() {
 			s := prev.rollout
 			s.State = provider.RolloutSuperseded

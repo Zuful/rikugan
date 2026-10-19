@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -217,11 +218,9 @@ type Rollout struct {
 	// (Kubernetes pod-template-hash, Compose config-hash). It is the
 	// value OrchestrationProvider.GetRevisionInstances takes.
 	Revision string
-	// Sequence is the human-facing name of the revision: its number
-	// when the backend has one (the Kubernetes
-	// deployment.kubernetes.io/revision), otherwise a short form of
-	// Revision (the first 12 characters of a Compose config-hash). Only
-	// numbers are ordered; compare rollouts by StartedAt otherwise.
+	// Sequence is the revision's number, ordered, when the backend has
+	// one (the Kubernetes deployment.kubernetes.io/revision); empty
+	// otherwise (Compose). Label names a rollout either way.
 	Sequence string
 	Images   []string
 	Rollback bool
@@ -231,9 +230,30 @@ type Rollout struct {
 	// CompletedAt starts the "after" comparison window. Zero unless
 	// State is RolloutComplete.
 	CompletedAt time.Time
+	// CompletedAtEstimated is set when the backend no longer knows the
+	// exact moment and CompletedAt is a lower bound that does not move
+	// (Compose, once the healthcheck log has dropped the first passing
+	// probe).
+	CompletedAtEstimated bool
 	// FailedAt and FailureReason are set when State is RolloutFailed.
 	FailedAt      time.Time
 	FailureReason string
+}
+
+// Label names the rollout for people and records: its Sequence, or the
+// short form of its Revision when the backend numbers none.
+func (r Rollout) Label() string {
+	if r.Sequence != "" {
+		return r.Sequence
+	}
+	rev := r.Revision
+	if i := strings.IndexByte(rev, ':'); i >= 0 {
+		rev = rev[i+1:] // sha256:…
+	}
+	if len(rev) > 12 {
+		return rev[:12]
+	}
+	return rev
 }
 
 // DeploymentSource reports the rollouts of services (concept 5b in

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/Zuful/rikugan/pkg/provider"
@@ -26,6 +25,10 @@ type Revision struct {
 	// first probe of its current run of passing probes with one. Zero
 	// while some container is not ready.
 	ReadyAt time.Time
+	// ReadyAtEstimated is set when, for some container, that first
+	// passing probe has dropped out of Docker's healthcheck log: its
+	// start, a lower bound that does not move, stands in for it.
+	ReadyAtEstimated bool
 }
 
 // Revisions returns the service's revisions, newest first (by their
@@ -59,17 +62,18 @@ func (p *Provider) Revisions(ctx context.Context, svc provider.Service) ([]Revis
 		if st.Running || st.Restarting {
 			rev.Live++
 		}
-		if at, ready := readyAt(&insp); ready {
+		if at, estimated, ready := readyAt(&insp); ready {
 			rev.Ready++
 			if at.After(rev.ReadyAt) {
 				rev.ReadyAt = at
 			}
+			rev.ReadyAtEstimated = rev.ReadyAtEstimated || estimated
 		}
 	}
 	out := make([]Revision, 0, len(byHash))
 	for _, rev := range byHash {
 		if rev.Ready < rev.Containers {
-			rev.ReadyAt = time.Time{}
+			rev.ReadyAt, rev.ReadyAtEstimated = time.Time{}, false
 		}
 		out = append(out, *rev)
 	}
@@ -77,41 +81,41 @@ func (p *Provider) Revisions(ctx context.Context, svc provider.Service) ([]Revis
 	return out, nil
 }
 
-// readyAt reports whether the container is ready, and since when.
-func readyAt(c *dockerInspect) (time.Time, bool) {
+// healthLogSize is how many probes Docker keeps in State.Health.Log.
+const healthLogSize = 5
+
+// readyAt reports whether the container is ready, since when, and
+// whether that time is an estimate.
+func readyAt(c *dockerInspect) (at time.Time, estimated, ready bool) {
 	st := c.State
 	if !st.Running || st.Restarting || st.Paused {
-		return time.Time{}, false
+		return time.Time{}, false, false
 	}
 	started := parseDockerTime(st.StartedAt)
 	if st.Health == nil {
-		return started, true
+		return started, false, true
 	}
 	if st.Health.Status != "healthy" {
-		return time.Time{}, false
+		return time.Time{}, false, false
 	}
-	return firstNonZero(passingSince(st.Health.Log), started), true
+	since, known := passingSince(st.Health.Log)
+	if !known || since.IsZero() {
+		return started, true, true
+	}
+	return since, false, true
 }
 
 // passingSince returns the start of the trailing run of passing probes
-// in the healthcheck log. Docker keeps only the last few probes, so for
-// a long-healthy container this is the oldest probe on record, later
-// than the true moment; for a rollout's fresh containers the log still
-// holds the first passing probe.
-func passingSince(log []healthProbe) time.Time {
+// in the healthcheck log, and whether that start is known. Docker keeps
+// only the last few probes: once the log is full of passing probes, the
+// run began before the oldest one on record, and taking that probe would
+// move the time forward from one call to the next (about 2.5 minutes
+// after a start with the default 30 s interval).
+func passingSince(log []healthProbe) (time.Time, bool) {
 	var since time.Time
-	for i := len(log) - 1; i >= 0 && log[i].ExitCode == 0; i-- {
+	i := len(log) - 1
+	for ; i >= 0 && log[i].ExitCode == 0; i-- {
 		since = parseDockerTime(log[i].Start)
 	}
-	return since
-}
-
-// ShortHash is the short form of a config-hash, as Sequence and
-// messages show it.
-func ShortHash(hash string) string {
-	hash = strings.TrimPrefix(hash, "sha256:")
-	if len(hash) > 12 {
-		return hash[:12]
-	}
-	return hash
+	return since, i >= 0 || len(log) < healthLogSize
 }

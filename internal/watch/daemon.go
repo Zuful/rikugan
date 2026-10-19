@@ -110,18 +110,21 @@ type rolloutState struct {
 // rename in Go must not change what is on disk.
 type (
 	rolloutRecord struct {
-		Namespace     string    `json:"namespace"`
-		Name          string    `json:"name"`
-		Kind          string    `json:"kind,omitempty"`
-		Revision      string    `json:"revision,omitempty"`
-		Sequence      string    `json:"sequence"`
-		Images        []string  `json:"images,omitempty"`
-		Rollback      bool      `json:"rollback,omitempty"`
-		State         string    `json:"state"`
-		StartedAt     time.Time `json:"started_at,omitzero"`
-		CompletedAt   time.Time `json:"completed_at,omitzero"`
-		FailedAt      time.Time `json:"failed_at,omitzero"`
-		FailureReason string    `json:"failure_reason,omitempty"`
+		Namespace   string    `json:"namespace"`
+		Name        string    `json:"name"`
+		Kind        string    `json:"kind,omitempty"`
+		Revision    string    `json:"revision,omitempty"`
+		Sequence    string    `json:"sequence"`
+		Images      []string  `json:"images,omitempty"`
+		Rollback    bool      `json:"rollback,omitempty"`
+		State       string    `json:"state"`
+		StartedAt   time.Time `json:"started_at,omitzero"`
+		CompletedAt time.Time `json:"completed_at,omitzero"`
+		// CompletedAtEstimated: the backend no longer knew the exact
+		// moment (provider.Rollout).
+		CompletedAtEstimated bool      `json:"completed_at_estimated,omitempty"`
+		FailedAt             time.Time `json:"failed_at,omitzero"`
+		FailureReason        string    `json:"failure_reason,omitempty"`
 	}
 	checkRecord struct {
 		Sequence   string   `json:"sequence"`
@@ -165,7 +168,7 @@ func toRolloutRecord(r provider.Rollout) rolloutRecord {
 		Namespace: r.Service.Namespace, Name: r.Service.Name, Kind: r.Service.Kind,
 		Revision: r.Revision, Sequence: r.Sequence, Images: r.Images, Rollback: r.Rollback,
 		State: string(r.State), StartedAt: r.StartedAt, CompletedAt: r.CompletedAt,
-		FailedAt: r.FailedAt, FailureReason: r.FailureReason,
+		CompletedAtEstimated: r.CompletedAtEstimated, FailedAt: r.FailedAt, FailureReason: r.FailureReason,
 	}
 }
 
@@ -174,12 +177,12 @@ func (rec rolloutRecord) rollout() provider.Rollout {
 		Service:  provider.Service{Namespace: rec.Namespace, Name: rec.Name, Kind: rec.Kind},
 		Revision: rec.Revision, Sequence: rec.Sequence, Images: rec.Images, Rollback: rec.Rollback,
 		State: provider.RolloutState(rec.State), StartedAt: rec.StartedAt, CompletedAt: rec.CompletedAt,
-		FailedAt: rec.FailedAt, FailureReason: rec.FailureReason,
+		CompletedAtEstimated: rec.CompletedAtEstimated, FailedAt: rec.FailedAt, FailureReason: rec.FailureReason,
 	}
 }
 
 func toCheckRecord(r provider.Rollout, cp time.Duration, late bool, rep health.Report) checkRecord {
-	rec := checkRecord{Sequence: r.Sequence, Checkpoint: cp.String(), Late: late,
+	rec := checkRecord{Sequence: r.Label(), Checkpoint: cp.String(), Late: late,
 		Outcome: string(rep.Outcome), Verdict: string(rep.Verdict), Notes: rep.Notes}
 	for _, s := range rep.Signals {
 		rec.Signals = append(rec.Signals, Signal{Name: s.Name, Status: string(s.Status), Reason: s.Reason})
@@ -330,7 +333,7 @@ func (d *Daemon) rolloutState(r provider.Rollout) *rolloutState {
 		st = &serviceState{rollouts: map[string]*rolloutState{}}
 		d.services[key] = st
 	}
-	rs := st.rollouts[r.Sequence]
+	rs := st.rollouts[r.Label()]
 	if rs == nil {
 		rs = &rolloutState{
 			rollout:  r,
@@ -338,7 +341,7 @@ func (d *Daemon) rolloutState(r provider.Rollout) *rolloutState {
 			checked:  map[time.Duration]bool{},
 			skipped:  map[time.Duration]bool{},
 		}
-		st.rollouts[r.Sequence] = rs
+		st.rollouts[r.Label()] = rs
 		st.prune(d.config(r.Service))
 	}
 	return rs
@@ -360,7 +363,7 @@ func (d *Daemon) Handle(ctx context.Context, r provider.Rollout) error {
 	st := d.services[serviceKey(r.Service)]
 	for _, older := range st.rollouts {
 		if older != rs && newer(rs.rollout, older.rollout) {
-			if err := d.skipPending(older, "superseded by revision "+r.Sequence); err != nil {
+			if err := d.skipPending(older, "superseded by revision "+r.Label()); err != nil {
 				return err
 			}
 		}
@@ -502,8 +505,8 @@ func (d *Daemon) supersededNow(ctx context.Context, rs *rolloutState) (bool, str
 			slog.String("service", serviceKey(rs.rollout.Service)), slog.String("error", err.Error()))
 		return false, ""
 	}
-	if cur.Sequence != rs.rollout.Sequence && newer(cur, rs.rollout) {
-		return true, cur.Sequence
+	if cur.Label() != rs.rollout.Label() && newer(cur, rs.rollout) {
+		return true, cur.Label()
 	}
 	return false, ""
 }
@@ -519,7 +522,7 @@ func (d *Daemon) check(ctx context.Context, rs *rolloutState, cp time.Duration, 
 		rs.retryAt = d.now().Add(retryAfter)
 		rs.failing, rs.failingKind = err.Error(), ""
 		d.logger().Warn("check failed, retrying", slog.String("service", serviceKey(r.Service)),
-			slog.String("revision", r.Sequence), slog.Duration("checkpoint", cp), slog.String("error", err.Error()))
+			slog.String("revision", r.Label()), slog.Duration("checkpoint", cp), slog.String("error", err.Error()))
 		var be *health.BackendError
 		if !errors.As(err, &be) {
 			return nil
@@ -552,7 +555,7 @@ func (d *Daemon) check(ctx context.Context, rs *rolloutState, cp time.Duration, 
 		if dec != nil {
 			msg := d.Notifier.message(ctx, c, *dec)
 			note = &notificationRecord{
-				Sequence: r.Sequence, Checkpoint: cp.String(), Event: dec.Event, Severity: string(dec.Severity),
+				Sequence: r.Label(), Checkpoint: cp.String(), Event: dec.Event, Severity: string(dec.Severity),
 				Title: msg.Title, Delivered: d.Notifier.Send(ctx, msg), State: next,
 			}
 			// No channel took it: nothing is recorded, so the check and
@@ -585,7 +588,7 @@ func (d *Daemon) check(ctx context.Context, rs *rolloutState, cp time.Duration, 
 	}
 	if d.Verdicts != nil {
 		d.Verdicts.Info("check",
-			slog.String("service", serviceKey(r.Service)), slog.String("revision", r.Sequence),
+			slog.String("service", serviceKey(r.Service)), slog.String("revision", r.Label()),
 			slog.String("checkpoint", cp.String()), slog.Bool("late", late),
 			slog.String("outcome", string(report.Outcome)), slog.String("verdict", string(report.Verdict)))
 	}
@@ -664,12 +667,12 @@ func (d *Daemon) skipPending(rs *rolloutState, reason string) error {
 
 func (d *Daemon) skip(rs *rolloutState, cp time.Duration, reason string) error {
 	r := rs.rollout
-	if err := d.append(KindSkip, r.Service, skipRecord{Sequence: r.Sequence, Checkpoint: cp.String(), Reason: reason}); err != nil {
+	if err := d.append(KindSkip, r.Service, skipRecord{Sequence: r.Label(), Checkpoint: cp.String(), Reason: reason}); err != nil {
 		return err
 	}
 	rs.skipped[cp] = true
 	d.logger().Info("checkpoint skipped", slog.String("service", serviceKey(r.Service)),
-		slog.String("revision", r.Sequence), slog.Duration("checkpoint", cp), slog.String("reason", reason))
+		slog.String("revision", r.Label()), slog.Duration("checkpoint", cp), slog.String("reason", reason))
 	return nil
 }
 
@@ -735,14 +738,14 @@ func (st *serviceState) prune(cfg health.Config) {
 		if s := rs.rollout.StartedAt; !s.IsZero() && s.After(horizon) {
 			continue
 		}
-		delete(st.rollouts, rs.rollout.Sequence)
+		delete(st.rollouts, rs.rollout.Label())
 	}
 }
 
 // newer reports whether a is a later rollout than b: by start time when
 // both have one, by revision number otherwise (a skipped revision is
 // known by its number alone). Start times come first because not every
-// backend numbers its revisions: a Compose revision is a config-hash.
+// backend numbers its revisions: Compose leaves Sequence empty.
 func newer(a, b provider.Rollout) bool {
 	if !a.StartedAt.IsZero() && !b.StartedAt.IsZero() && !a.StartedAt.Equal(b.StartedAt) {
 		return a.StartedAt.After(b.StartedAt)

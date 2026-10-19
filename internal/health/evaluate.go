@@ -103,8 +103,11 @@ func Evaluate(cfg Config, in Inputs) Report {
 		return r
 	}
 	r.Checkpoint = cp
+	if in.Rollout.CompletedAtEstimated {
+		r.Notes = append(r.Notes, "completion time estimated: the exact moment was no longer on record, so the after window starts at the earliest it could have")
+	}
 	if in.Rollout.Rollback {
-		r.Notes = append(r.Notes, "rollback to revision "+in.Rollout.Sequence)
+		r.Notes = append(r.Notes, "rollback to revision "+in.Rollout.Label())
 	}
 
 	beforeEnd := in.Rollout.StartedAt

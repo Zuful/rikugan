@@ -100,8 +100,8 @@ func TestLastRollout(t *testing.T) {
 				!got.CompletedAt.Equal(tt.want.CompletedAt) || !got.FailedAt.Equal(tt.want.FailedAt) {
 				t.Errorf("got %+v\nwant %+v", got, tt.want)
 			}
-			if got.Revision != newHash || got.Sequence != "222222222222" || got.Rollback {
-				t.Errorf("identity: revision %q sequence %q rollback %v", got.Revision, got.Sequence, got.Rollback)
+			if got.Revision != newHash || got.Sequence != "" || got.Label() != "222222222222" || got.Rollback {
+				t.Errorf("identity: revision %q sequence %q label %q rollback %v", got.Revision, got.Sequence, got.Label(), got.Rollback)
 			}
 			if got.State == provider.RolloutFailed && !strings.Contains(got.FailureReason, "compose_rollout_deadline") {
 				t.Errorf("failure reason %q", got.FailureReason)

@@ -81,7 +81,7 @@ func Render(r health.Report) string {
 	var b strings.Builder
 	ro := r.Rollout
 	fmt.Fprintf(&b, "## Deploy health — `%s/%s`\n\n", ro.Service.Namespace, ro.Service.Name)
-	fmt.Fprintf(&b, "**Rollout:** revision %s (`%s`)", orDash(ro.Sequence), orDash(ro.Revision))
+	fmt.Fprintf(&b, "**Rollout:** revision %s (`%s`)", orDash(ro.Label()), orDash(ro.Revision))
 	if ro.Rollback {
 		b.WriteString(", rollback")
 	}
