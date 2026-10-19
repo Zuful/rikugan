@@ -1,0 +1,72 @@
+# The lab's tooling: Prometheus, a load generator and rikugan serve,
+# watching the services of the "shop" project (compose.shop.yaml).
+# Driven by ./lab.sh; see README.md.
+name: rikugan-lab
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    container_name: rikugan-lab-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=30d
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:${LAB_PROMETHEUS_PORT:-9090}:9090"
+    networks: [lab]
+
+  loadgen:
+    image: rikugan-lab-app:local
+    build:
+      context: ../..
+      dockerfile: test/e2e/app/Dockerfile
+    container_name: rikugan-lab-loadgen
+    restart: unless-stopped
+    command: ["loadgen"]
+    environment:
+      TARGETS: http://web:8080/work=${LAB_WEB_RPS:-20},http://api:8080/work=${LAB_API_RPS:-3}
+      CYCLE: ${LAB_CYCLE:-24h}
+      AMPLITUDE: ${LAB_AMPLITUDE:-0.5}
+      BURST_EVERY: ${LAB_BURST_EVERY:-6h}
+    networks: [lab]
+
+  rikugan-serve:
+    image: rikugan:serve-compose
+    build:
+      context: ../..
+      target: serve-compose
+    container_name: rikugan-lab-serve
+    restart: unless-stopped
+    environment:
+      ORCHESTRATION_PROVIDER: dockercompose
+      COMPOSE_PROJECT_NAME: lab-shop
+      PROMETHEUS_URL: http://prometheus:9090
+      RIKUGAN_STATE_DIR: /var/lib/rikugan
+      RIKUGAN_SERVE_LISTEN: 0.0.0.0:8080
+      RIKUGAN_SERVE_TOKEN: ${RIKUGAN_SERVE_TOKEN:?run ./lab.sh up, which creates .env}
+      RIKUGAN_COMPOSE_ROLLOUT_DEADLINE: ${RIKUGAN_COMPOSE_ROLLOUT_DEADLINE:-5m}
+      RIKUGAN_SWEEP_INTERVAL: ${RIKUGAN_SWEEP_INTERVAL:-1h}
+      RIKUGAN_HEALTH_CONFIG: /etc/rikugan/health.yaml
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      RIKUGAN_HEARTBEAT_URL: ${RIKUGAN_HEARTBEAT_URL:-}
+      RIKUGAN_LOG_LEVEL: ${RIKUGAN_LOG_LEVEL:-info}
+    volumes:
+      - rikugan-state:/var/lib/rikugan
+      - ./health.yaml:/etc/rikugan/health.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "127.0.0.1:${LAB_RIKUGAN_PORT:-8080}:8080"
+    networks: [lab]
+
+volumes:
+  prometheus-data:
+  rikugan-state:
+
+networks:
+  lab:
+    name: rikugan-lab

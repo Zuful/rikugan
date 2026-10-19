@@ -72,6 +72,9 @@ jobs:
       - name: Smoke-test rikugan serve on Docker Compose
         run: test/compose-smoke.sh
 
+      - name: Smoke-test the local lab
+        run: test/lab-smoke.sh
+
       - name: Verify the systemd unit
         run: |
           go build -o rikugan ./cmd/rikugan
