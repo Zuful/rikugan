@@ -42,7 +42,7 @@ func TestGetWatchReports(t *testing.T) {
 		query, auth = r.URL.RawQuery, r.Header.Get("Authorization")
 		_ = json.NewEncoder(w).Encode(watch.VerdictsResponse{Verdicts: []watch.Verdict{
 			{Time: time.Date(2026, 10, 19, 9, 30, 0, 0, time.UTC), Service: "shop/checkout", Revision: "8",
-				Checkpoint: "15m0s", Outcome: "evaluated", Verdict: "degraded",
+				Checkpoint: "15m0s", Partial: true, Outcome: "evaluated", Verdict: "degraded",
 				Signals: []watch.Signal{
 					{Name: "error_rate", Status: "degraded", Reason: "5xx 0.20% → 6.00% | spike"},
 					{Name: "latency", Status: "ok", Reason: "fine"},
@@ -66,7 +66,7 @@ func TestGetWatchReports(t *testing.T) {
 	out := text(res)
 	for _, want := range []string{
 		"## Proactive mode verdicts: `shop/checkout`, since 6h",
-		"| 2026-10-19 09:30 | shop/checkout | 8 | +15m0s | degraded | error_rate degraded: 5xx 0.20% → 6.00% \\| spike |",
+		"| 2026-10-19 09:30 | shop/checkout | 8 | +15m0s (metrics down) | degraded | error_rate degraded: 5xx 0.20% → 6.00% \\| spike |",
 		"| 2026-10-19 09:00 | shop/checkout | 7 | rollout failure (late) | degraded | — |",
 	} {
 		if !strings.Contains(out, want) {

@@ -3,6 +3,7 @@ package health
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -71,7 +72,13 @@ func (c *Collector) Check(ctx context.Context, svc provider.Service) (Report, er
 	if err != nil {
 		return Report{}, fmt.Errorf("last rollout of %s/%s: %w", svc.Namespace, svc.Name, err)
 	}
-	return c.CheckRollout(ctx, rollout, CheckOptions{})
+	r, err := c.CheckRollout(ctx, rollout, CheckOptions{})
+	// A failing metrics backend still leaves a report, which says so:
+	// the tool shows what it could read rather than an error.
+	if be := (*BackendError)(nil); errors.As(err, &be) && be.Kind == BackendMetrics {
+		return r, nil
+	}
+	return r, err
 }
 
 // CheckOptions narrows what CheckRollout evaluates. The zero value
@@ -99,12 +106,13 @@ func (c *Collector) CheckRollout(ctx context.Context, rollout provider.Rollout, 
 
 	instances, err := c.Orchestration.GetRevisionInstances(ctx, svc, rollout.Revision)
 	if err != nil {
-		return Report{}, fmt.Errorf("instances of %s/%s revision %s: %w", svc.Namespace, svc.Name, rollout.Revision, err)
+		return Report{}, c.orchestrationError(fmt.Errorf("instances of %s/%s revision %s: %w", svc.Namespace, svc.Name, rollout.Revision, err))
 	}
 	in := Inputs{Rollout: rollout, Now: now, Instances: instances, Checkpoint: opts.Checkpoint, BeforeEnd: opts.BeforeEnd}
 
 	// Metrics only matter when there is a verdict to compute.
 	var notes []string
+	var metricsErr error
 	if rollout.State == provider.RolloutComplete {
 		cp, outcome := SelectCheckpoint(cfg, rollout.CompletedAt, now)
 		if opts.Checkpoint > 0 && now.Sub(rollout.CompletedAt) >= opts.Checkpoint {
@@ -118,17 +126,27 @@ func (c *Collector) CheckRollout(ctx context.Context, rollout provider.Rollout, 
 			}
 			from := beforeEnd.Add(-cfg.BeforeWindow)
 			to := rollout.CompletedAt.Add(cp)
-			in.Current, notes = c.fetch(ctx, tpl, vars, from, to, 0)
-			seasonal, _ := c.fetch(ctx, Templates{RequestRate: tpl.RequestRate}, vars, from, to, seasonalOffset)
-			if len(seasonal.RequestRate) > 0 {
-				in.Seasonal = &seasonal
+			in.Current, notes, metricsErr = c.fetch(ctx, tpl, vars, from, to, 0)
+			if metricsErr == nil {
+				seasonal, _, _ := c.fetch(ctx, Templates{RequestRate: tpl.RequestRate}, vars, from, to, seasonalOffset)
+				if len(seasonal.RequestRate) > 0 {
+					in.Seasonal = &seasonal
+				}
 			}
 		}
 	}
 
 	r := Evaluate(cfg, in)
+	if metricsErr != nil {
+		metricsUnavailable(&r, c.Metrics.Name(), metricsErr)
+		return r, &BackendError{Kind: BackendMetrics, Name: c.Metrics.Name(), Err: metricsErr}
+	}
 	r.Notes = append(r.Notes, notes...)
 	return r, nil
+}
+
+func (c *Collector) orchestrationError(err error) error {
+	return &BackendError{Kind: BackendOrchestration, Name: c.Orchestration.Name(), Err: err}
 }
 
 type templateVars struct{ Namespace, Service, Revision string }
@@ -140,10 +158,14 @@ var safeName = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9_.-]*[a-zA-Z0-9])?$`)
 
 // fetch runs every non-empty template over [from, to], shifted back by
 // offset. Returned samples are shifted forward by the same offset so
-// they line up with the current window.
-func (c *Collector) fetch(ctx context.Context, tpl Templates, vars templateVars, from, to time.Time, offset time.Duration) (Signals, []string) {
+// they line up with the current window. A failing query is a note; the
+// error is only set when every query sent failed: the metrics backend
+// itself is failing, not one template.
+func (c *Collector) fetch(ctx context.Context, tpl Templates, vars templateVars, from, to time.Time, offset time.Duration) (Signals, []string, error) {
 	var sig Signals
 	var notes []string
+	sent, failed := 0, 0
+	var firstErr error
 	for _, q := range []struct {
 		name string
 		tpl  string
@@ -163,8 +185,13 @@ func (c *Collector) fetch(ctx context.Context, tpl Templates, vars templateVars,
 			notes = append(notes, fmt.Sprintf("%s query: %v", q.name, err))
 			continue
 		}
+		sent++
 		samples, err := c.Metrics.GetMetric(ctx, query, from.Add(-offset), to.Add(-offset), seriesStep)
 		if err != nil {
+			failed++
+			if firstErr == nil {
+				firstErr = err
+			}
 			notes = append(notes, fmt.Sprintf("%s query failed: %v", q.name, err))
 			continue
 		}
@@ -175,7 +202,10 @@ func (c *Collector) fetch(ctx context.Context, tpl Templates, vars templateVars,
 		}
 		*q.dst = series
 	}
-	return sig, notes
+	if sent > 0 && failed == sent {
+		return sig, notes, firstErr
+	}
+	return sig, notes, nil
 }
 
 func render(tpl string, vars templateVars) (string, error) {
@@ -241,11 +271,11 @@ func (c *Collector) CheckSweep(ctx context.Context, svc provider.Service, prev *
 
 	rollout, err := c.Deployments.LastRollout(ctx, svc)
 	if err != nil {
-		return Report{}, nil, fmt.Errorf("current revision of %s/%s: %w", svc.Namespace, svc.Name, err)
+		return Report{}, nil, c.orchestrationError(fmt.Errorf("current revision of %s/%s: %w", svc.Namespace, svc.Name, err))
 	}
 	instances, err := c.Orchestration.GetRevisionInstances(ctx, svc, rollout.Revision)
 	if err != nil {
-		return Report{}, nil, fmt.Errorf("instances of %s/%s: %w", svc.Namespace, svc.Name, err)
+		return Report{}, nil, c.orchestrationError(fmt.Errorf("instances of %s/%s: %w", svc.Namespace, svc.Name, err))
 	}
 	counts := make(map[string]int, len(instances))
 	since := now.Add(-SweepWindow)
@@ -270,11 +300,14 @@ func (c *Collector) CheckSweep(ctx context.Context, svc provider.Service, prev *
 
 	vars := templateVars{Namespace: svc.Namespace, Service: svc.Name, Revision: rollout.Revision}
 	from := now.Add(-cfg.LeakSpan - 15*time.Minute)
-	current, notes := c.fetch(ctx, tpl, vars, from, now, 0)
+	current, notes, metricsErr := c.fetch(ctx, tpl, vars, from, now, 0)
 	var baseline *Signals
 	var age time.Duration
 	for _, offset := range []time.Duration{7 * 24 * time.Hour, 24 * time.Hour} {
-		b, _ := c.fetch(ctx, tpl, vars, now.Add(-SweepWindow), now, offset)
+		if metricsErr != nil {
+			break
+		}
+		b, _, _ := c.fetch(ctx, tpl, vars, now.Add(-SweepWindow), now, offset)
 		if len(b.RequestRate) > 0 {
 			baseline, age = &b, offset
 			break
@@ -286,6 +319,10 @@ func (c *Collector) CheckSweep(ctx context.Context, svc provider.Service, prev *
 		Instances: instances, FirstSweep: prev == nil,
 	})
 	r.Rollout = rollout
+	if metricsErr != nil {
+		metricsUnavailable(&r, c.Metrics.Name(), metricsErr)
+		return r, counts, &BackendError{Kind: BackendMetrics, Name: c.Metrics.Name(), Err: metricsErr}
+	}
 	r.Notes = append(r.Notes, notes...)
 	return r, counts, nil
 }

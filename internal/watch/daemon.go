@@ -3,6 +3,7 @@ package watch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -83,6 +84,7 @@ type Daemon struct {
 	services  map[string]*serviceState
 	sweeps    map[string]*sweepServiceState
 	lastSweep time.Time
+	outages   map[string]*outage // by backend kind
 }
 
 type serviceState struct {
@@ -95,7 +97,11 @@ type rolloutState struct {
 	checked  map[time.Duration]bool
 	skipped  map[time.Duration]bool
 	retryAt  time.Time
-	notify   notifyState
+	// failing is the last check error, until a check succeeds, and
+	// failingKind the backend kind behind it, if one.
+	failing     string
+	failingKind string
+	notify      notifyState
 }
 
 // Payloads of the journal records. They are the journal's own format,
@@ -125,6 +131,11 @@ type (
 		Verdict    string   `json:"verdict,omitempty"`
 		Signals    []Signal `json:"signals,omitempty"`
 		Notes      []string `json:"notes,omitempty"`
+		// Partial is a check made while the metrics backend was failing:
+		// only the instance signals were read. It is recorded because it
+		// notified a degraded verdict; the checkpoint is still checked
+		// in full once the backend is back.
+		Partial bool `json:"partial,omitempty"`
 	}
 	// Signal is one signal of a recorded check.
 	Signal struct {
@@ -276,8 +287,11 @@ func (d *Daemon) Replay() error {
 				st.rollouts[n.Sequence].notify = n.State
 			}
 		case KindCheck, KindSkip:
-			var c skipRecord // shares the sequence and checkpoint fields
-			if json.Unmarshal(rec.Data, &c) != nil {
+			var c struct {
+				skipRecord      // shares the sequence and checkpoint fields
+				Partial    bool `json:"partial"`
+			}
+			if json.Unmarshal(rec.Data, &c) != nil || c.Partial {
 				return nil
 			}
 			cp, err := time.ParseDuration(c.Checkpoint)
@@ -384,6 +398,16 @@ func (d *Daemon) RunDue(ctx context.Context) (time.Time, error) {
 		st := d.services[key]
 		for _, rs := range st.sorted() {
 			r := rs.rollout
+			if r.State == provider.RolloutFailed {
+				at, err := d.retryFailure(ctx, rs)
+				if err != nil {
+					return time.Time{}, err
+				}
+				if !at.IsZero() && (next.IsZero() || at.Before(next)) {
+					next = at
+				}
+				continue
+			}
 			if r.State != provider.RolloutComplete || r.CompletedAt.IsZero() {
 				continue
 			}
@@ -392,7 +416,12 @@ func (d *Daemon) RunDue(ctx context.Context) (time.Time, error) {
 				continue
 			}
 			if now.Sub(r.CompletedAt) > d.config(r.Service).StaleAfter {
-				if err := d.skipPending(rs, "stale: the daemon was down past stale_after"); err != nil {
+				reason := "stale: the daemon was down past stale_after"
+				if rs.failing != "" {
+					reason = rs.givenUp()
+					d.warnOutage(ctx, rs.failingKind)
+				}
+				if err := d.skipPending(rs, reason); err != nil {
 					return time.Time{}, err
 				}
 				continue
@@ -425,7 +454,7 @@ func (d *Daemon) RunDue(ctx context.Context) (time.Time, error) {
 			// (a slow check, a busy loop) both run.
 			for _, cp := range due[:len(due)-1] {
 				if now.Sub(r.CompletedAt.Add(cp)) > lateAfter {
-					if err := d.skip(rs, cp, "missed while the daemon was down"); err != nil {
+					if err := d.skip(rs, cp, rs.missed()); err != nil {
 						return time.Time{}, err
 					}
 				} else if err := d.check(ctx, rs, cp, false); err != nil {
@@ -450,6 +479,13 @@ func (d *Daemon) RunDue(ctx context.Context) (time.Time, error) {
 		}
 		if due := d.nextSweep(); next.IsZero() || due.Before(next) {
 			next = due
+		}
+		retry, err := d.retrySweeps(ctx)
+		if err != nil {
+			return time.Time{}, err
+		}
+		if !retry.IsZero() && (next.IsZero() || retry.Before(next)) {
+			next = retry
 		}
 	}
 	return next, nil
@@ -478,11 +514,32 @@ func (d *Daemon) check(ctx context.Context, rs *rolloutState, cp time.Duration, 
 	r := rs.rollout
 	opts := health.CheckOptions{Checkpoint: cp, BeforeEnd: d.beforeEnd(rs)}
 	report, err := d.Checker.CheckRollout(ctx, r, opts)
+	partial := false
 	if err != nil {
 		rs.retryAt = d.now().Add(retryAfter)
+		rs.failing, rs.failingKind = err.Error(), ""
 		d.logger().Warn("check failed, retrying", slog.String("service", serviceKey(r.Service)),
 			slog.String("revision", r.Sequence), slog.Duration("checkpoint", cp), slog.String("error", err.Error()))
-		return nil
+		var be *health.BackendError
+		if !errors.As(err, &be) {
+			return nil
+		}
+		rs.failingKind = be.Kind
+		d.backendFailed(ctx, be, d.config(r.Service).StaleAfter)
+		// Metrics failing, instances read: a degraded verdict on the
+		// instance signals alone is sound and is notified without
+		// waiting for the metrics.
+		if be.Kind != health.BackendMetrics || report.Verdict != health.StatusDegraded {
+			return nil
+		}
+		d.backendOK(ctx, health.BackendOrchestration)
+		partial = true
+	} else {
+		rs.failing, rs.failingKind = "", ""
+		d.backendOK(ctx, health.BackendOrchestration)
+		if r.State == provider.RolloutComplete && report.Outcome == health.OutcomeEvaluated {
+			d.backendOK(ctx, health.BackendMetrics)
+		}
 	}
 	c := Check{Rollout: r, Checkpoint: cp, Late: late, Report: report}
 
@@ -498,12 +555,28 @@ func (d *Daemon) check(ctx context.Context, rs *rolloutState, cp time.Duration, 
 				Sequence: r.Sequence, Checkpoint: cp.String(), Event: dec.Event, Severity: string(dec.Severity),
 				Title: msg.Title, Delivered: d.Notifier.Send(ctx, msg), State: next,
 			}
+			// No channel took it: nothing is recorded, so the check and
+			// its message are tried again rather than lost.
+			if len(note.Delivered) == 0 && len(d.Notifier.Channels) > 0 {
+				rs.retryAt = d.now().Add(retryAfter)
+				rs.failing, rs.failingKind = "no notification channel took the message", ""
+				d.logger().Error("notification not delivered on any channel, retrying the check",
+					slog.String("service", serviceKey(r.Service)), slog.String("title", msg.Title))
+				return nil
+			}
 		}
 	}
-	if err := d.append(KindCheck, r.Service, toCheckRecord(r, cp, late, report)); err != nil {
+	if partial && note == nil {
+		return nil // already notified: wait for the full check
+	}
+	rec := toCheckRecord(r, cp, late, report)
+	rec.Partial = partial
+	if err := d.append(KindCheck, r.Service, rec); err != nil {
 		return err
 	}
-	rs.checked[cp] = true
+	if !partial {
+		rs.checked[cp] = true
+	}
 	if note != nil {
 		if err := d.append(KindNotification, r.Service, note); err != nil {
 			return err
@@ -520,6 +593,30 @@ func (d *Daemon) check(ctx context.Context, rs *rolloutState, cp time.Duration, 
 		d.OnCheck(ctx, c)
 	}
 	return nil
+}
+
+// retryFailure retries the immediate check of a failed rollout that
+// could not run, and gives it up past stale_after. It returns when to
+// come back, zero when nothing is pending.
+func (d *Daemon) retryFailure(ctx context.Context, rs *rolloutState) (time.Time, error) {
+	if rs.retryAt.IsZero() || rs.checked[FailureCheckpoint] || rs.skipped[FailureCheckpoint] {
+		return time.Time{}, nil
+	}
+	now := d.now()
+	if now.Sub(rs.rollout.FailedAt) > d.config(rs.rollout.Service).StaleAfter {
+		d.warnOutage(ctx, rs.failingKind)
+		return time.Time{}, d.skip(rs, FailureCheckpoint, rs.givenUp())
+	}
+	if now.Before(rs.retryAt) {
+		return rs.retryAt, nil
+	}
+	if err := d.check(ctx, rs, FailureCheckpoint, false); err != nil {
+		return time.Time{}, err
+	}
+	if rs.checked[FailureCheckpoint] {
+		return time.Time{}, nil
+	}
+	return rs.retryAt, nil
 }
 
 // beforeEnd returns where the before window must end when this rollout

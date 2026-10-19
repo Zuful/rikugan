@@ -123,6 +123,9 @@ func Render(verdicts []watch.Verdict, service, since string) string {
 		if v.Late {
 			cp += " (late)"
 		}
+		if v.Partial {
+			cp += " (metrics down)"
+		}
 		verdict := v.Verdict
 		if verdict == "" {
 			verdict = "— (" + v.Outcome + ")"

@@ -51,6 +51,11 @@ type fakeChecker struct {
 	mu    sync.Mutex
 	calls []call
 	fail  bool
+	// verdict is the verdict reported (default ok); err, when set, is
+	// returned along with the report, as the collector does with a
+	// failing metrics backend.
+	verdict health.Status
+	err     error
 }
 
 func (f *fakeChecker) CheckRollout(_ context.Context, r provider.Rollout, opts health.CheckOptions) (health.Report, error) {
@@ -60,7 +65,11 @@ func (f *fakeChecker) CheckRollout(_ context.Context, r provider.Rollout, opts h
 		return health.Report{}, errors.New("prometheus unreachable")
 	}
 	f.calls = append(f.calls, call{r.Sequence, opts.Checkpoint, opts.BeforeEnd})
-	return health.Report{Rollout: r, Outcome: health.OutcomeEvaluated, Verdict: health.StatusOK, Checkpoint: opts.Checkpoint}, nil
+	v := f.verdict
+	if v == "" {
+		v = health.StatusOK
+	}
+	return health.Report{Rollout: r, Outcome: health.OutcomeEvaluated, Verdict: v, Checkpoint: opts.Checkpoint}, f.err
 }
 
 func (f *fakeChecker) seen() string {
