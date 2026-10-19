@@ -2,12 +2,17 @@ package prometheus
 
 import (
 	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	promv1 "github.com/prometheus/client_golang/api/prometheus/v1"
 	"github.com/prometheus/common/model"
+
+	"github.com/Zuful/rikugan/pkg/provider"
 )
 
 // fakeAPI implements just enough of promv1.API to drive the
@@ -144,5 +149,50 @@ func TestProvider_ListAvailableMetrics_NoPrefixReturnsAll(t *testing.T) {
 	}
 	if len(got) != 3 || got[0] != "a" || got[2] != "z" {
 		t.Errorf("got %v, want sorted [a m z]", got)
+	}
+}
+
+// The errors come from a real HTTP server answering like Prometheus, so
+// the classification goes through the client library's own decoding.
+func TestProvider_GetMetric_TellsInvalidQueriesFromOutages(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		status  int
+		body    string
+		invalid bool
+	}{
+		{"parse error", http.StatusBadRequest, `{"status":"error","errorType":"bad_data","error":"1:5: parse error: unexpected identifier"}`, true},
+		{"execution error", http.StatusUnprocessableEntity, `{"status":"error","errorType":"execution","error":"found duplicate series for the match group"}`, true},
+		{"server error", http.StatusServiceUnavailable, `{"status":"error","errorType":"unavailable","error":"too busy"}`, false},
+		{"timeout", http.StatusServiceUnavailable, `{"status":"error","errorType":"timeout","error":"query timed out in expression evaluation"}`, false},
+		{"not Prometheus", http.StatusNotFound, `404 page not found`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+			p, err := New(WithURL(srv.URL))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = p.GetMetric(context.Background(), "up", time.Now().Add(-time.Minute), time.Now(), time.Minute)
+			if err == nil {
+				t.Fatal("no error")
+			}
+			if got := errors.Is(err, provider.ErrInvalidQuery); got != tc.invalid {
+				t.Errorf("invalid query: %v, want %v (%v)", got, tc.invalid, err)
+			}
+		})
+	}
+	// Unreachable: an outage.
+	p, err := New(WithURL("http://127.0.0.1:9"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.GetMetric(context.Background(), "up", time.Now().Add(-time.Minute), time.Now(), time.Minute); err == nil || errors.Is(err, provider.ErrInvalidQuery) {
+		t.Errorf("unreachable: %v", err)
 	}
 }

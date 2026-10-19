@@ -121,6 +121,7 @@ func (c *Collector) CheckRollout(ctx context.Context, rollout provider.Rollout, 
 	// Metrics only matter when there is a verdict to compute.
 	var notes []string
 	var metricsErr error
+	inv := &invalidTemplates{}
 	if rollout.State == provider.RolloutComplete {
 		cp, outcome := SelectCheckpoint(cfg, rollout.CompletedAt, now)
 		if opts.Checkpoint > 0 && now.Sub(rollout.CompletedAt) >= opts.Checkpoint {
@@ -134,29 +135,85 @@ func (c *Collector) CheckRollout(ctx context.Context, rollout provider.Rollout, 
 			}
 			from := beforeEnd.Add(-cfg.BeforeWindow)
 			to := rollout.CompletedAt.Add(cp)
-			in.Current, notes, metricsErr = c.fetch(ctx, tpl, vars, from, to, 0)
+			in.Current, notes, metricsErr = c.fetch(ctx, tpl, vars, from, to, 0, inv)
 			if metricsErr == nil {
-				seasonal, _, _ := c.fetch(ctx, Templates{RequestRate: tpl.RequestRate}, vars, from, to, seasonalOffset)
+				seasonal, _, _ := c.fetch(ctx, Templates{RequestRate: tpl.RequestRate}, vars, from, to, seasonalOffset, inv)
 				if len(seasonal.RequestRate) > 0 {
 					in.Seasonal = &seasonal
 				}
 			}
 			if metricsErr == nil && cfg.LatencyMethod != LatencyMedian && tpl.LatencyWindowP95 != "" {
 				lw := &WindowP95{}
-				lw.Before, lw.HasBefore = c.windowP95(ctx, tpl, vars, beforeEnd, cfg.BeforeWindow, 0, &notes)
-				lw.After, lw.HasAfter = c.windowP95(ctx, tpl, vars, to, cp, 0, &notes)
+				lw.Before, lw.HasBefore = c.windowP95(ctx, tpl, vars, beforeEnd, cfg.BeforeWindow, 0, &notes, inv)
+				lw.After, lw.HasAfter = c.windowP95(ctx, tpl, vars, to, cp, 0, &notes, inv)
 				in.LatencyWindow = lw
 			}
 		}
 	}
 
 	r := Evaluate(cfg, in)
+	r.InvalidTemplates = inv.list
 	if metricsErr != nil {
 		metricsUnavailable(&r, c.Metrics.Name(), metricsErr)
+		r.Notes = append(r.Notes, inv.notes()...)
 		return r, &BackendError{Kind: BackendMetrics, Name: c.Metrics.Name(), Err: metricsErr}
 	}
 	r.Notes = append(r.Notes, notes...)
+	r.Notes = append(r.Notes, inv.notes()...)
 	return r, nil
+}
+
+// ValidateTemplates sends each of the service's query templates as a
+// dry run over the last few minutes, and returns those that cannot
+// work as written: they do not render, or the backend refuses them. An
+// error means the backend itself failed every query: nothing was
+// validated. An empty result is not checked: a service may have served
+// no 5xx, or no request at all, lately.
+func (c *Collector) ValidateTemplates(ctx context.Context, svc provider.Service) ([]InvalidTemplate, error) {
+	now := time.Now()
+	if c.Now != nil {
+		now = c.Now()
+	}
+	_, tpl := DefaultConfig(), DefaultTemplates()
+	if c.Settings != nil {
+		_, tpl = c.Settings(svc)
+	}
+	const span = 5 * time.Minute
+	vars := templateVars{Namespace: svc.Namespace, Service: svc.Name, Window: fmt.Sprintf("%ds", int(span.Seconds()))}
+	inv := &invalidTemplates{}
+	sent, failed := 0, 0
+	var firstErr error
+	for _, q := range []struct{ key, tpl string }{
+		{"request_rate", tpl.RequestRate},
+		{"error_rate", tpl.ErrorRate},
+		{"latency_p95", tpl.LatencyP95},
+		{"latency_window_p95", tpl.LatencyWindowP95},
+		{"cpu", tpl.CPU},
+		{"memory", tpl.Memory},
+	} {
+		if q.tpl == "" {
+			continue
+		}
+		query, err := render(q.tpl, vars)
+		if inv.add(q.key, q.tpl, err) || err != nil {
+			continue
+		}
+		_, err = c.Metrics.GetMetric(ctx, query, now.Add(-span), now, seriesStep)
+		if inv.add(q.key, q.tpl, err) {
+			continue
+		}
+		sent++
+		if err != nil {
+			failed++
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	if sent > 0 && failed == sent {
+		return nil, &BackendError{Kind: BackendMetrics, Name: c.Metrics.Name(), Err: firstErr}
+	}
+	return inv.list, nil
 }
 
 func (c *Collector) orchestrationError(err error) error {
@@ -173,15 +230,20 @@ var safeName = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9_.-]*[a-zA-Z0-9])?$`)
 // windowP95 evaluates LatencyWindowP95 for the window of length w
 // ending at end (shifted back by offset). A query error is a note; no
 // value (no requests in the window, NaN) is not evaluated.
-func (c *Collector) windowP95(ctx context.Context, tpl Templates, vars templateVars, end time.Time, w, offset time.Duration, notes *[]string) (float64, bool) {
+func (c *Collector) windowP95(ctx context.Context, tpl Templates, vars templateVars, end time.Time, w, offset time.Duration, notes *[]string, inv *invalidTemplates) (float64, bool) {
 	vars.Window = fmt.Sprintf("%ds", int(w.Seconds()))
 	query, err := render(tpl.LatencyWindowP95, vars)
 	if err != nil {
-		*notes = append(*notes, fmt.Sprintf("latency window p95 query: %v", err))
+		if !inv.add("latency_window_p95", tpl.LatencyWindowP95, err) {
+			*notes = append(*notes, fmt.Sprintf("latency window p95 query: %v", err))
+		}
 		return 0, false
 	}
 	at := end.Add(-offset)
 	samples, err := c.Metrics.GetMetric(ctx, query, at, at, seriesStep)
+	if inv.add("latency_window_p95", tpl.LatencyWindowP95, err) {
+		return 0, false
+	}
 	if err != nil {
 		*notes = append(*notes, fmt.Sprintf("latency window p95 query failed: %v", err))
 		return 0, false
@@ -206,32 +268,37 @@ func (c *Collector) windowP95(ctx context.Context, tpl Templates, vars templateV
 // they line up with the current window. A failing query is a note; the
 // error is only set when every query sent failed: the metrics backend
 // itself is failing, not one template.
-func (c *Collector) fetch(ctx context.Context, tpl Templates, vars templateVars, from, to time.Time, offset time.Duration) (Signals, []string, error) {
+func (c *Collector) fetch(ctx context.Context, tpl Templates, vars templateVars, from, to time.Time, offset time.Duration, inv *invalidTemplates) (Signals, []string, error) {
 	var sig Signals
 	var notes []string
 	sent, failed := 0, 0
 	var firstErr error
 	for _, q := range []struct {
-		name string
-		tpl  string
-		dst  *Series
+		name, key string
+		tpl       string
+		dst       *Series
 	}{
-		{"request rate", tpl.RequestRate, &sig.RequestRate},
-		{"error rate", tpl.ErrorRate, &sig.ErrorRate},
-		{"latency p95", tpl.LatencyP95, &sig.LatencyP95},
-		{"CPU", tpl.CPU, &sig.CPU},
-		{"memory", tpl.Memory, &sig.Memory},
+		{"request rate", "request_rate", tpl.RequestRate, &sig.RequestRate},
+		{"error rate", "error_rate", tpl.ErrorRate, &sig.ErrorRate},
+		{"latency p95", "latency_p95", tpl.LatencyP95, &sig.LatencyP95},
+		{"CPU", "cpu", tpl.CPU, &sig.CPU},
+		{"memory", "memory", tpl.Memory, &sig.Memory},
 	} {
 		if q.tpl == "" {
 			continue
 		}
 		query, err := render(q.tpl, vars)
 		if err != nil {
-			notes = append(notes, fmt.Sprintf("%s query: %v", q.name, err))
+			if !inv.add(q.key, q.tpl, err) {
+				notes = append(notes, fmt.Sprintf("%s query: %v", q.name, err))
+			}
 			continue
 		}
-		sent++
 		samples, err := c.Metrics.GetMetric(ctx, query, from.Add(-offset), to.Add(-offset), seriesStep)
+		if inv.add(q.key, q.tpl, err) {
+			continue // the backend answered: it refused the query
+		}
+		sent++
 		if err != nil {
 			failed++
 			if firstErr == nil {
@@ -264,13 +331,45 @@ func render(tpl string, vars templateVars) (string, error) {
 	}
 	t, err := template.New("q").Option("missingkey=error").Parse(tpl)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("%w: %w", errTemplate, err)
 	}
 	var b bytes.Buffer
 	if err := t.Execute(&b, vars); err != nil {
-		return "", err
+		return "", fmt.Errorf("%w: %w", errTemplate, err)
 	}
 	return b.String(), nil
+}
+
+// errTemplate marks a template that does not parse or execute.
+var errTemplate = errors.New("template does not render")
+
+// invalidTemplates collects the templates of one check that cannot
+// work as written, once each.
+type invalidTemplates struct{ list []InvalidTemplate }
+
+// add records err against the template if it says the template itself
+// is wrong: it does not render, or the backend refused the query. It
+// reports whether it did.
+func (inv *invalidTemplates) add(key, tpl string, err error) bool {
+	if !errors.Is(err, errTemplate) && !errors.Is(err, provider.ErrInvalidQuery) {
+		return false
+	}
+	for _, t := range inv.list {
+		if t.Name == key {
+			return true
+		}
+	}
+	inv.list = append(inv.list, InvalidTemplate{Name: key, Template: tpl, Err: err.Error()})
+	return true
+}
+
+// notes describes the invalid templates for a report.
+func (inv *invalidTemplates) notes() []string {
+	var out []string
+	for _, t := range inv.list {
+		out = append(out, fmt.Sprintf("template %s invalid: %s", t.Name, t.Err))
+	}
+	return out
 }
 
 // singleSeries returns the samples of an aggregated query in time
@@ -345,14 +444,15 @@ func (c *Collector) CheckSweep(ctx context.Context, svc provider.Service, prev *
 
 	vars := templateVars{Namespace: svc.Namespace, Service: svc.Name, Revision: rollout.Revision}
 	from := now.Add(-cfg.LeakSpan - 15*time.Minute)
-	current, notes, metricsErr := c.fetch(ctx, tpl, vars, from, now, 0)
+	inv := &invalidTemplates{}
+	current, notes, metricsErr := c.fetch(ctx, tpl, vars, from, now, 0, inv)
 	var baseline *Signals
 	var age time.Duration
 	for _, offset := range []time.Duration{7 * 24 * time.Hour, 24 * time.Hour} {
 		if metricsErr != nil {
 			break
 		}
-		b, _, _ := c.fetch(ctx, tpl, vars, now.Add(-SweepWindow), now, offset)
+		b, _, _ := c.fetch(ctx, tpl, vars, now.Add(-SweepWindow), now, offset, inv)
 		if len(b.RequestRate) > 0 {
 			baseline, age = &b, offset
 			break
@@ -362,18 +462,21 @@ func (c *Collector) CheckSweep(ctx context.Context, svc provider.Service, prev *
 	var lw *WindowP95
 	if baseline != nil && cfg.LatencyMethod != LatencyMedian && tpl.LatencyWindowP95 != "" {
 		lw = &WindowP95{}
-		lw.Before, lw.HasBefore = c.windowP95(ctx, tpl, vars, now, SweepWindow, age, &notes)
-		lw.After, lw.HasAfter = c.windowP95(ctx, tpl, vars, now, SweepWindow, 0, &notes)
+		lw.Before, lw.HasBefore = c.windowP95(ctx, tpl, vars, now, SweepWindow, age, &notes, inv)
+		lw.After, lw.HasAfter = c.windowP95(ctx, tpl, vars, now, SweepWindow, 0, &notes, inv)
 	}
 	r := EvaluateSweep(cfg, SweepInputs{
 		Now: now, Current: current, Baseline: baseline, BaselineAge: age,
 		Instances: instances, FirstSweep: prev == nil, LatencyWindow: lw,
 	})
 	r.Rollout = rollout
+	r.InvalidTemplates = inv.list
 	if metricsErr != nil {
 		metricsUnavailable(&r, c.Metrics.Name(), metricsErr)
+		r.Notes = append(r.Notes, inv.notes()...)
 		return r, counts, &BackendError{Kind: BackendMetrics, Name: c.Metrics.Name(), Err: metricsErr}
 	}
 	r.Notes = append(r.Notes, notes...)
+	r.Notes = append(r.Notes, inv.notes()...)
 	return r, counts, nil
 }

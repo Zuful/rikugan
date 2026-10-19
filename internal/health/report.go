@@ -83,9 +83,21 @@ type Report struct {
 	Checkpoint time.Duration // set when Outcome is OutcomeEvaluated and the rollout completed
 	Signals    []SignalResult
 	Notes      []string
+	// InvalidTemplates are the query templates the metrics backend
+	// refused as queries, or that do not render: the signals they feed
+	// stay unevaluated until they are fixed.
+	InvalidTemplates []InvalidTemplate
 	// NextCheck is when the first checkpoint is reached, for
 	// OutcomeTooEarly.
 	NextCheck time.Time
+}
+
+// InvalidTemplate is a query template that cannot work as written.
+type InvalidTemplate struct {
+	// Name is the template's settings key: request_rate, error_rate…
+	Name     string
+	Template string
+	Err      string
 }
 
 // Signal returns the named signal's result, if it was produced.

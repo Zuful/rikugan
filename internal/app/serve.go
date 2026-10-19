@@ -117,9 +117,10 @@ func Serve(ctx context.Context, logger, verdicts *slog.Logger) error {
 			cfg, _ := settings.For(svc)
 			return cfg
 		},
-		Notifier: notifier,
-		Verdicts: verdicts,
-		Logger:   logger,
+		Notifier:          notifier,
+		Verdicts:          verdicts,
+		Logger:            logger,
+		ValidateTemplates: validateTemplates(namespaces, orchestration, collector),
 	}
 	if daemon.Heartbeat, err = serveHeartbeat(logger); err != nil {
 		return err
@@ -199,6 +200,26 @@ func composeRolloutDeadline() (time.Duration, error) {
 		return 0, fmt.Errorf("RIKUGAN_COMPOSE_ROLLOUT_DEADLINE: want a duration of at least 10s, such as 10m; got %q", raw)
 	}
 	return d, nil
+}
+
+// validateTemplates dry-runs the query templates of every service of
+// the watched namespaces, at start.
+func validateTemplates(namespaces []string, services provider.OrchestrationProvider, collector *health.Collector) func(context.Context) []watch.TemplateCheck {
+	return func(ctx context.Context) []watch.TemplateCheck {
+		var out []watch.TemplateCheck
+		for _, ns := range namespaces {
+			list, err := services.ListServices(ctx, ns)
+			if err != nil {
+				out = append(out, watch.TemplateCheck{Service: provider.Service{Namespace: ns}, Err: err})
+				continue
+			}
+			for _, svc := range list {
+				invalid, err := collector.ValidateTemplates(ctx, svc)
+				out = append(out, watch.TemplateCheck{Service: svc, Invalid: invalid, Err: err})
+			}
+		}
+		return out
+	}
 }
 
 // serveSweep reads the periodic sweep's settings (design §6):

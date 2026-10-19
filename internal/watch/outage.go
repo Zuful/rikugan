@@ -2,12 +2,26 @@ package watch
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/Zuful/rikugan/internal/health"
+	"github.com/Zuful/rikugan/internal/watch/journal"
 	"github.com/Zuful/rikugan/pkg/provider"
+)
+
+// KindOutage records a backend outage's start, the warning sent about
+// it and its end, so that a daemon restarting more often than
+// stale_after still warns.
+const KindOutage = "backend_outage"
+
+// Outage events.
+const (
+	outageFailing = "failing"
+	outageWarned  = "warned"
+	outageBack    = "back"
 )
 
 // outage is a backend the daemon cannot read, since its first failure
@@ -19,19 +33,58 @@ type outage struct {
 	warned bool
 }
 
+type outageRecord struct {
+	Event   string    `json:"event"`
+	Backend string    `json:"backend"` // the kind: metrics, orchestration
+	Name    string    `json:"name"`
+	Since   time.Time `json:"since"`
+	Error   string    `json:"error,omitempty"`
+}
+
+// recordOutage journals an outage event. A failure to write is logged,
+// not fatal: the outage is still tracked in memory.
+func (d *Daemon) recordOutage(event, kind string, o *outage) {
+	data, err := json.Marshal(outageRecord{Event: event, Backend: kind, Name: o.name, Since: o.since, Error: o.err})
+	if err == nil {
+		err = d.Journal.Append(journal.Record{Time: d.now(), Kind: KindOutage, Data: data})
+	}
+	if err != nil {
+		d.logger().Error("cannot record a backend outage", slog.String("event", event), slog.String("error", err.Error()))
+	}
+}
+
+// replayOutage rebuilds the outages from the journal: the last event of
+// each backend kind wins.
+func (d *Daemon) replayOutage(data []byte) {
+	var rec outageRecord
+	if json.Unmarshal(data, &rec) != nil || rec.Backend == "" {
+		return
+	}
+	switch rec.Event {
+	case outageFailing:
+		d.outages[rec.Backend] = &outage{name: rec.Name, since: rec.Since, err: rec.Error}
+	case outageWarned:
+		d.outages[rec.Backend] = &outage{name: rec.Name, since: rec.Since, err: rec.Error, warned: true}
+	case outageBack:
+		delete(d.outages, rec.Backend)
+	}
+}
+
 // backendFailed records a failure of a backend. Once the outage has
 // lasted past limit (stale_after), or a check is given up because of
 // it, the team is warned, once per outage: a blind daemon must be an
-// event, not a silence. Outages are kept in memory; a restart starts
-// the clock again.
+// event, not a silence. An outage's start and its warning are
+// journaled, so a restart neither starts the clock again nor warns
+// twice.
 func (d *Daemon) backendFailed(ctx context.Context, be *health.BackendError, limit time.Duration) {
 	if d.outages == nil {
 		d.outages = map[string]*outage{}
 	}
 	o := d.outages[be.Kind]
 	if o == nil {
-		o = &outage{name: be.Name, since: d.now()}
+		o = &outage{name: be.Name, since: d.now(), err: be.Err.Error()}
 		d.outages[be.Kind] = o
+		d.recordOutage(outageFailing, be.Kind, o)
 	}
 	o.err = be.Err.Error()
 	if d.now().Sub(o.since) > limit {
@@ -50,6 +103,7 @@ func (d *Daemon) warnOutage(ctx context.Context, kind string) {
 		slog.String("backend", o.name), slog.Time("since", o.since), slog.String("error", o.err))
 	if d.Notifier == nil {
 		o.warned = true
+		d.recordOutage(outageWarned, kind, o)
 		return
 	}
 	body := "Rollout checks and sweeps cannot be evaluated until it is back. Last error: " + o.err
@@ -62,6 +116,9 @@ func (d *Daemon) warnOutage(ctx context.Context, kind string) {
 		Body:     body,
 	}
 	o.warned = len(d.Notifier.Channels) == 0 || len(d.Notifier.Send(ctx, msg)) > 0
+	if o.warned {
+		d.recordOutage(outageWarned, kind, o)
+	}
 }
 
 // backendOK closes an outage of that kind, if any; one the team was
@@ -72,6 +129,7 @@ func (d *Daemon) backendOK(ctx context.Context, kind string) {
 		return
 	}
 	delete(d.outages, kind)
+	d.recordOutage(outageBack, kind, o)
 	if !o.warned || d.Notifier == nil {
 		return
 	}

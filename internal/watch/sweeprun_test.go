@@ -32,6 +32,8 @@ type sweepChecker struct {
 	// err is returned along with the report, as with a failing
 	// metrics backend.
 	err error
+	// invalid is reported as the report's invalid templates.
+	invalid []health.InvalidTemplate
 }
 
 func (c *sweepChecker) CheckSweep(_ context.Context, svc provider.Service, prev *health.PreviousSweep) (health.Report, map[string]int, error) {
@@ -48,7 +50,8 @@ func (c *sweepChecker) CheckSweep(_ context.Context, svc provider.Service, prev 
 		v, c.queue[key] = q[0], q[1:]
 	}
 	return health.Report{Rollout: provider.Rollout{Sequence: "3"}, Outcome: health.OutcomeEvaluated, Verdict: v,
-			Signals: []health.SignalResult{{Name: "memory_leak", Status: v, Reason: "memory per replica 400 MiB → 600 MiB"}}},
+			Signals:          []health.SignalResult{{Name: "memory_leak", Status: v, Reason: "memory per replica 400 MiB → 600 MiB"}},
+			InvalidTemplates: c.invalid},
 		map[string]int{key + "-pod": len(c.prevs[key])}, c.err
 }
 
@@ -207,4 +210,15 @@ func keysOf(m map[string][]*health.PreviousSweep) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// A sweep meeting an invalid template warns too: a service that never
+// rolls out would otherwise never reveal it.
+func TestSweepWarnsAboutInvalidTemplates(t *testing.T) {
+	h, chk, tg := sweepHarness(t, nil)
+	chk.invalid = []health.InvalidTemplate{badErrorRate}
+	h.at(0).due()
+	if got := tg.titles(); got != "[warning] rikugan: template error_rate invalid" {
+		t.Errorf("messages: %q", got)
+	}
 }

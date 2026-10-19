@@ -273,6 +273,7 @@ func (d *Daemon) evaluateSweep(ctx context.Context, svc provider.Service) *sweep
 	}
 	st.retryAt, st.svc = time.Time{}, svc
 	rep, counts, err := d.Sweep.Checker.CheckSweep(ctx, svc, st.prev)
+	d.warnInvalidTemplates(ctx, svc, rep.InvalidTemplates)
 	if err != nil {
 		d.logger().Warn("sweep: check failed", slog.String("service", key), slog.String("error", err.Error()))
 		var be *health.BackendError

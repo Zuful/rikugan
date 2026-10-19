@@ -3,6 +3,7 @@ package health
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -366,6 +367,95 @@ func TestCollector_OneQueryFailingIsANote(t *testing.T) {
 	}
 	if r.Verdict != StatusOK || !strings.Contains(strings.Join(r.Notes, "\n"), "CPU query failed") {
 		t.Errorf("verdict %s, notes %q", r.Verdict, r.Notes)
+	}
+}
+
+// Prometheus answering "bad_data" for one template is no outage: the
+// template is wrong, and the report names it so the daemon can warn.
+func TestCollector_InvalidTemplate(t *testing.T) {
+	m := busy(0.120)
+	m.fail, m.failMatch = fmt.Errorf("prometheus query_range: %w: bad_data: parse error", provider.ErrInvalidQuery), `code=~"5.."`
+	c, _ := newCollector(m, rollout(), minute(15).Add(10*time.Second))
+	r, err := c.CheckRollout(context.Background(), rollout(), CheckOptions{Checkpoint: 15 * time.Minute})
+	if err != nil {
+		t.Fatalf("an invalid template is no backend outage: %v", err)
+	}
+	if len(r.InvalidTemplates) != 1 || r.InvalidTemplates[0].Name != "error_rate" || r.InvalidTemplates[0].Template != DefaultTemplates().ErrorRate {
+		t.Fatalf("invalid templates %+v, want error_rate", r.InvalidTemplates)
+	}
+	if s, _ := r.Signal(SignalErrorRate); s.Status != StatusNotEvaluated {
+		t.Errorf("error rate: %+v", s)
+	}
+	if notes := strings.Join(r.Notes, "\n"); !strings.Contains(notes, "template error_rate invalid: ") || strings.Contains(notes, "error rate query failed") {
+		t.Errorf("notes %q", r.Notes)
+	}
+
+	// Every query refused: still no outage, the backend answered.
+	m.failMatch = ""
+	r, err = c.CheckRollout(context.Background(), rollout(), CheckOptions{Checkpoint: 15 * time.Minute})
+	if err != nil || len(r.InvalidTemplates) < 5 {
+		t.Errorf("every template refused: err %v, invalid %d", err, len(r.InvalidTemplates))
+	}
+	c.Now = func() time.Time { return sweepNow }
+	if r, _, err := c.CheckSweep(context.Background(), svcAPI, &PreviousSweep{At: sweepNow.Add(-4 * time.Hour)}); err != nil || len(r.InvalidTemplates) < 5 {
+		t.Errorf("sweep: err %v, invalid %+v", err, r.InvalidTemplates)
+	}
+
+	// A template that does not render is invalid too; an unsafe service
+	// name is not the template's fault.
+	m.fail = nil
+	c.Now = func() time.Time { return minute(15).Add(10 * time.Second) }
+	c.Settings = func(provider.Service) (Config, Templates) {
+		tpl := DefaultTemplates()
+		tpl.CPU = `rate(cpu{service="{{.Nope}}"}[1m])`
+		return DefaultConfig(), tpl
+	}
+	r, err = c.CheckRollout(context.Background(), rollout(), CheckOptions{Checkpoint: 15 * time.Minute})
+	if err != nil || len(r.InvalidTemplates) != 1 || r.InvalidTemplates[0].Name != "cpu" {
+		t.Errorf("unrenderable template: err %v, invalid %+v", err, r.InvalidTemplates)
+	}
+	bad := rollout()
+	bad.Service.Name = `api"}`
+	if r, _ := c.CheckRollout(context.Background(), bad, CheckOptions{Checkpoint: 15 * time.Minute}); len(r.InvalidTemplates) != 0 {
+		t.Errorf("unsafe name blamed on the templates: %+v", r.InvalidTemplates)
+	}
+}
+
+// The dry run at the daemon's start: refused and unrenderable templates
+// come back, a failing backend is an error, and no data is fine.
+func TestCollector_ValidateTemplates(t *testing.T) {
+	m := &fakeMetrics{}
+	m.fail, m.failMatch = fmt.Errorf("%w: bad_data: parse error", provider.ErrInvalidQuery), `code=~"5.."`
+	c, _ := newCollector(m, rollout(), minute(15))
+	c.Settings = func(provider.Service) (Config, Templates) {
+		tpl := DefaultTemplates()
+		tpl.CPU = `{{.Nope}}`
+		return DefaultConfig(), tpl
+	}
+	invalid, err := c.ValidateTemplates(context.Background(), svcAPI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, it := range invalid {
+		names = append(names, it.Name)
+	}
+	if got := strings.Join(names, " "); got != "error_rate cpu" {
+		t.Errorf("invalid templates %q, want error_rate and cpu", got)
+	}
+	for _, call := range m.calls {
+		if strings.Contains(call.query, "{{") || call.end.Sub(call.start) != 5*time.Minute {
+			t.Errorf("query %q over %s", call.query, call.end.Sub(call.start))
+		}
+		if strings.Contains(call.query, "increase(") && !strings.Contains(call.query, "[300s]") {
+			t.Errorf("window p95 query %q, want a 5-minute window", call.query)
+		}
+	}
+
+	m.fail, m.failMatch = errors.New("connection refused"), ""
+	var be *BackendError
+	if _, err := c.ValidateTemplates(context.Background(), svcAPI); !errors.As(err, &be) || be.Kind != BackendMetrics {
+		t.Errorf("backend down: %v, want a metrics BackendError", err)
 	}
 }
 
