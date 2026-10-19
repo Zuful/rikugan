@@ -26,8 +26,12 @@ spec:
         checksum/health-config: {{ .Values.serve.healthConfig | sha256sum }}
     spec:
       serviceAccountName: {{ include "rikugan.serveName" . }}
+      # The image's user is "nonroot" by name, which the kubelet cannot
+      # check against runAsNonRoot: the numeric id must be given.
       securityContext:
         runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
         fsGroup: 65532
       containers:
         - name: serve
