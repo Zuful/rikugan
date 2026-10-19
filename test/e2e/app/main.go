@@ -43,7 +43,7 @@ func main() {
 			loadgen()
 			return
 		default:
-			log.Fatalf("unknown command %q: want healthcheck or loadgen", os.Args[1])
+			log.Fatal("unknown command: want healthcheck or loadgen")
 		}
 	}
 	if os.Getenv("CRASH") == "true" {
@@ -61,7 +61,7 @@ func main() {
 	if raw := os.Getenv("LOAD_RPS"); raw != "" {
 		var err error
 		if rps, err = strconv.ParseFloat(raw, 64); err != nil || rps < 0 {
-			log.Fatalf("LOAD_RPS: want a number of requests per second, got %q", raw)
+			log.Fatal("LOAD_RPS: want a non-negative number of requests per second")
 		}
 	}
 

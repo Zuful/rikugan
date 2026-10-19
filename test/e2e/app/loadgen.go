@@ -102,7 +102,7 @@ func envDuration(name string, def time.Duration) time.Duration {
 	}
 	d, err := time.ParseDuration(raw)
 	if err != nil || d < 0 {
-		log.Fatalf("%s: want a duration such as 24h, got %q", name, raw)
+		log.Fatalf("%s: want a duration such as 24h", name)
 	}
 	return d
 }
@@ -114,7 +114,7 @@ func envFloat(name string, def float64) float64 {
 	}
 	f, err := strconv.ParseFloat(raw, 64)
 	if err != nil || f < 0 {
-		log.Fatalf("%s: want a non-negative number, got %q", name, raw)
+		log.Fatalf("%s: want a non-negative number", name)
 	}
 	return f
 }

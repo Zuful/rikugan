@@ -13,7 +13,7 @@ x-app: &app
     interval: 5s
     timeout: 2s
     retries: 2
-  mem_limit: 768m
+  mem_limit: ${LAB_MEM_LIMIT:-768m} # per replica
   networks: [lab]
 
 services:
