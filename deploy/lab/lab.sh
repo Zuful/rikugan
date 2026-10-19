@@ -105,7 +105,7 @@ cmd_up() {
     echo "note: no notification channel in .env, verdicts are recorded but not sent"
   fi
   for s in $SERVICES; do [ -f "state/$s.env" ] || write_env "$s" healthy; done
-  $LAB build
+  docker image inspect rikugan-lab-app:local rikugan:serve-compose >/dev/null 2>&1 || cmd_build
   $LAB up -d
   $SHOP up -d
   record up "" "" ""
@@ -119,6 +119,10 @@ Wait 30 minutes before the first deploy: rikugan compares each rollout
 with the 30 minutes before it, and Prometheus starts empty.
 EOF
 }
+
+# cmd_build builds the app and rikugan images; up builds them only
+# when they are missing.
+cmd_build() { $LAB build; }
 
 cmd_deploy() { # service scenario
   [ $# -eq 2 ] || die "usage: ./lab.sh deploy <web|api> <scenario>  (./lab.sh scenarios lists them)"
@@ -229,7 +233,8 @@ cmd_scenarios() {
 
 cmd_help() {
   cat <<'EOF'
-./lab.sh up                          build and start the lab
+./lab.sh up                          start the lab (builds the images the first time)
+./lab.sh build                       rebuild the images, e.g. after a git pull
 ./lab.sh deploy <web|api> <scenario> deploy a new revision (./lab.sh scenarios)
 ./lab.sh chain <svc> <count> <min>   deploy healthy revisions back to back
 ./lab.sh traffic <svc> <rps>         change a service's mean traffic
@@ -245,7 +250,7 @@ EOF
 command=${1:-help}
 [ $# -eq 0 ] || shift
 case "$command" in
-up | deploy | chain | traffic | prometheus | verdicts | status | export | down | reset | scenarios | help)
+up | build | deploy | chain | traffic | prometheus | verdicts | status | export | down | reset | scenarios | help)
   "cmd_$command" "$@"
   ;;
 *) cmd_help; exit 1 ;;

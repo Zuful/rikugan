@@ -41,6 +41,8 @@ cd deploy/lab
 ./lab.sh up          # first run: creates .env with an API token, builds, starts
 ```
 
+After a `git pull`, `./lab.sh build` then `./lab.sh up` runs the new code.
+
 Put your Telegram bot token and chat id in `.env`, then run
 `./lab.sh up` again to apply them.
 
