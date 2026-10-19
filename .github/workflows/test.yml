@@ -99,3 +99,17 @@ jobs:
 
       - name: Run the end-to-end test
         run: go test -tags e2e -v -count=1 -timeout 20m ./test/e2e/
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Lint the Helm chart
+        run: |
+          helm lint helm/rikugan
+          helm lint helm/rikugan --set serve.enabled=true --set prometheus.url=http://prometheus:9090
+
+      - name: Smoke-test rikugan serve from the Helm chart
+        run: |
+          docker build -t rikugan:test .
+          kind load docker-image rikugan:test --name e2e
+          test/e2e/helm-smoke.sh

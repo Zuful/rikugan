@@ -559,6 +559,18 @@ helm install rikugan helm/rikugan \
 
 The chart creates a ServiceAccount and ClusterRole with read access to pods, pod logs, and events. Both are optional (`--set serviceAccount.create=false --set rbac.create=false`).
 
+`--set serve.enabled=true` also deploys `rikugan serve`, the proactive mode's daemon:
+
+```sh
+helm install rikugan helm/rikugan \
+  --set prometheus.url=http://prometheus:9090 \
+  --set serve.enabled=true \
+  --set 'serve.namespaces={shop,payments}' \
+  --set 'serve.envFrom[0].secretRef.name=rikugan-notifications'   # TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID…
+```
+
+It runs as a single instance by construction: `replicas: 1` is fixed in the template (not a value) and the strategy is `Recreate`, so an upgrade never runs two daemons on the journal. The journal lives on a `ReadWriteOnce` PVC (`serve.persistence`). Each watched namespace (default: the release namespace) gets a read-only Role. The verdicts API is exposed by a Service and requires a bearer token, generated once into the Secret `<release>-rikugan-serve` (key `token`) and kept across `helm upgrade`; `helm install` prints how to fetch it and port-forward for `get_watch_reports`. **With GitOps (Argo CD, Flux), set `serve.auth.existingSecret`**: they render the chart without cluster access, so the generated token would change on every sync. `serve.healthConfig` takes the per-service thresholds file.
+
 ### Claude Desktop
 
 Add to your Claude Desktop MCP configuration (`claude_desktop_config.json`):

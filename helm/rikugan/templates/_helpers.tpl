@@ -49,3 +49,23 @@ Service account name.
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
 {{- end }}
+
+{{/*
+rikugan serve: resource names and the namespaces it watches.
+*/}}
+{{- define "rikugan.serveName" -}}
+{{- printf "%s-serve" (include "rikugan.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{- define "rikugan.serveSecretName" -}}
+{{- default (printf "%s-rikugan-serve" .Release.Name) .Values.serve.auth.existingSecret }}
+{{- end }}
+
+{{- define "rikugan.serveNamespaces" -}}
+{{- if .Values.serve.namespaces }}{{ join "," .Values.serve.namespaces }}{{ else }}{{ .Release.Namespace }}{{ end }}
+{{- end }}
+
+{{- define "rikugan.serveSelectorLabels" -}}
+{{ include "rikugan.selectorLabels" . }}
+app.kubernetes.io/component: serve
+{{- end }}
