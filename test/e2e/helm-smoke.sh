@@ -7,6 +7,21 @@ set -euo pipefail
 
 release=smoke
 ns=rikugan-smoke
+
+# On failure, show why: the pod's events and the daemon's logs.
+diagnose() {
+  echo "--- pods" >&2
+  kubectl -n "$ns" get pods -o wide >&2 || true
+  echo "--- describe" >&2
+  kubectl -n "$ns" describe pod -l app.kubernetes.io/component=serve >&2 || true
+  echo "--- logs" >&2
+  kubectl -n "$ns" logs -l app.kubernetes.io/component=serve --tail=50 >&2 || true
+  kubectl -n "$ns" logs -l app.kubernetes.io/component=serve --tail=50 --previous >&2 || true
+  echo "--- pvc" >&2
+  kubectl -n "$ns" get pvc >&2 || true
+}
+trap 'diagnose' ERR
+
 kubectl create namespace "$ns"
 
 install() {
