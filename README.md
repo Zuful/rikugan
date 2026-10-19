@@ -525,7 +525,7 @@ ALERTS_PROVIDER=pagerduty \
 
 ### Proactive mode: `rikugan serve` (in progress)
 
-`rikugan serve` is the daemon mode of the same binary: it follows the rollouts of the watched namespaces and runs the `check_deploy_health` rules on each one at +5, +15 and +30 minutes after it completes, and at once when it fails. Every rollout, verdict and skipped checkpoint is recorded in an append-only journal (`verdicts.jsonl`) under the state directory, from which it resumes after a restart without running a check twice; checkpoints missed while it was down are summed up in one late check. Each verdict is also written to stdout as one JSON line, for log pipelines.
+`rikugan serve` is the daemon mode of the same binary: it follows the rollouts of the watched namespaces and runs the `check_deploy_health` rules on each one at +5, +15 and +30 minutes after it completes, and at once when it fails. Every rollout, verdict and skipped checkpoint is recorded in an append-only journal (`verdicts.jsonl`) under the state directory, from which it resumes after a restart without running a check twice; checkpoints missed while it was down are summed up in one late check. When rollouts follow each other closely, a rollout's before window ends where the last stable period did, at the start of the first rollout of the chain; when that is more than `stale_after` (2 h) back, it is no credible baseline, so latency, error rate, saturation and traffic are not compared with it, and only the blunt error rule and the instance signals apply. Each verdict is also written to stdout as one JSON line, for log pipelines.
 
 ```bash
 RIKUGAN_SERVE_NAMESPACES=shop,payments \

@@ -116,6 +116,15 @@ func Evaluate(cfg Config, in Inputs) Report {
 	before := window{beforeEnd.Add(-cfg.BeforeWindow), beforeEnd}
 	after := window{in.Rollout.CompletedAt, in.Rollout.CompletedAt.Add(cp)}
 
+	if gap := in.Rollout.StartedAt.Sub(beforeEnd); gap > cfg.StaleAfter {
+		r.Signals = append(r.Signals, staleBaselineSignals(cfg, in.Current, after, gap)...)
+		r.Signals = append(r.Signals, instanceSignals(cfg, in)...)
+		r.Verdict = overall(r.Signals)
+		r.Notes = append(r.Notes, fmt.Sprintf("rollouts chained for %s: the last stable period is past the %s limit, so latency, error rate, saturation and traffic are not compared with it; only the blunt error rule and the instance signals apply",
+			gap.Round(time.Minute), cfg.StaleAfter))
+		return r
+	}
+
 	volume := volumeGuard(cfg, in.Current.RequestRate, before, after)
 	r.Signals = append(r.Signals,
 		latencySignal(cfg, in.Current, before, after, volume, cp),
@@ -340,6 +349,34 @@ func bluntErrorRule(cfg Config, s Signals, before, after window, vol volumeCheck
 	}
 	res.Reason += fmt.Sprintf("; blunt rule (5xx above %.0f%% with at least %.0f errors) not triggered", cfg.BluntErrorRate*100, cfg.BluntErrorMinErr)
 	return res
+}
+
+// staleBaselineSignals evaluates a rollout whose before window would
+// end too long before it (rollouts chained for hours): diurnal drift
+// makes that window no credible baseline, so nothing is compared with
+// it. Only the blunt error rule applies, on the after window alone and
+// at every checkpoint: it needs no baseline. The before window cannot
+// veto it either, for the same reason.
+func staleBaselineSignals(cfg Config, s Signals, after window, gap time.Duration) []SignalResult {
+	reason := fmt.Sprintf("no credible baseline: the last stable period ended %s before this rollout", gap.Round(time.Minute))
+	errRes := SignalResult{Name: SignalErrorRate, Status: StatusNotEvaluated, Reason: reason}
+	if cfg.BluntRule {
+		a, okA := after.count(s.RequestRate)
+		ea, okE := after.count(s.ErrorRate)
+		if okA && okE && a > 0 {
+			ra := ea / a
+			errRes.Reason += fmt.Sprintf("; blunt rule: 5xx %.1f%% (%.0f errors in %.0f requests) after", ra*100, ea, a)
+			if ra > cfg.BluntErrorRate && ea >= cfg.BluntErrorMinErr {
+				errRes.Status = StatusDegraded
+			}
+		}
+	}
+	return []SignalResult{
+		{Name: SignalLatency, Status: StatusNotEvaluated, Reason: reason},
+		errRes,
+		{Name: SignalSaturation, Status: StatusNotEvaluated, Reason: reason},
+		{Name: SignalTraffic, Status: StatusNotEvaluated, Reason: reason},
+	}
 }
 
 // instanceSignals reads the new revision's instances: restarts and

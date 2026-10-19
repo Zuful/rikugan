@@ -717,3 +717,93 @@ func constantSeries(fromMinute, toMinute, v float64) Series {
 	}
 	return s
 }
+
+// Rollouts every 20 minutes for 4 hours: the daemon ends the before
+// window at the first one's start, 4 hours back, where diurnal drift
+// makes it no credible baseline.
+func TestEvaluate_ChainedPastStaleAfter(t *testing.T) {
+	chained := func(s Signals, cp float64) Inputs {
+		in := inputs(s, cp)
+		in.BeforeEnd = in.Rollout.StartedAt.Add(-4 * time.Hour)
+		return in
+	}
+	tests := []struct {
+		name    string
+		in      Inputs
+		verdict Verdict
+		signals map[string]Status
+	}{
+		{
+			name:    "healthy: no OK without a baseline",
+			in:      chained(healthy(), 15),
+			verdict: StatusInsufficientData,
+			signals: map[string]Status{SignalLatency: StatusNotEvaluated, SignalErrorRate: StatusNotEvaluated, SignalSaturation: StatusNotEvaluated, SignalTraffic: StatusNotEvaluated},
+		},
+		{
+			name: "frank latency regression: not compared",
+			in: func() Inputs {
+				s := healthy()
+				s.LatencyP95 = profile(step(0.120, 0.450))
+				return chained(s, 15)
+			}(),
+			verdict: StatusInsufficientData,
+		},
+		{
+			name: "blunt regression (5xx 30%) at +15 on a busy service: the blunt rule still applies",
+			in: func() Inputs {
+				s := healthy()
+				s.ErrorRate = profile(step(perMinute(1200)*0.002, perMinute(1200)*0.30))
+				return chained(s, 15)
+			}(),
+			verdict: StatusDegraded,
+			signals: map[string]Status{SignalErrorRate: StatusDegraded},
+		},
+		{
+			name: "blunt regression at the last checkpoint: still applies, there is no better window coming",
+			in: func() Inputs {
+				s := healthy()
+				s.ErrorRate = profile(step(perMinute(1200)*0.002, perMinute(1200)*0.30))
+				return chained(s, 30)
+			}(),
+			verdict: StatusDegraded,
+		},
+		{
+			name: "crash loop: instance signals still apply",
+			in: func() Inputs {
+				in := chained(healthy(), 15)
+				in.Instances[0].CrashLooping = true
+				return in
+			}(),
+			verdict: StatusDegraded,
+			signals: map[string]Status{SignalRestarts: StatusDegraded},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := Evaluate(DefaultConfig(), tc.in)
+			if r.Verdict != tc.verdict {
+				t.Errorf("verdict %s, want %s\n%s", r.Verdict, tc.verdict, dump(r))
+			}
+			for name, want := range tc.signals {
+				if got, _ := r.Signal(name); got.Status != want {
+					t.Errorf("signal %s: %+v, want %s", name, got, want)
+				}
+			}
+			if !strings.Contains(strings.Join(r.Notes, "\n"), "rollouts chained for 4h0m0s") {
+				t.Errorf("notes %q do not explain the missing baseline", r.Notes)
+			}
+		})
+	}
+
+	// Chained for under stale_after: compared as usual.
+	s := Signals{
+		RequestRate: constantSeries(-200, 31, perMinute(1200)),
+		ErrorRate:   constantSeries(-200, 31, perMinute(1200)*0.002),
+		LatencyP95:  constantSeries(-200, 31, 0.120),
+	}
+	in := inputs(s, 15)
+	in.BeforeEnd = in.Rollout.StartedAt.Add(-110 * time.Minute)
+	if r := Evaluate(DefaultConfig(), in); r.Verdict != StatusOK {
+		t.Errorf("chained for 1h50: verdict %s, want ok\n%s", r.Verdict, dump(r))
+	}
+}
