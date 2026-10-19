@@ -82,11 +82,17 @@ type Daemon struct {
 	Now func() time.Time
 	// Heartbeat, when set, is pinged from the daemon's loop.
 	Heartbeat *Heartbeat
+	// ValidateTemplates, when set, runs once at start: each service's
+	// query templates are sent as a dry run, and the invalid ones are
+	// warned about like those a check meets.
+	ValidateTemplates func(context.Context) []TemplateCheck
 
 	services  map[string]*serviceState
 	sweeps    map[string]*sweepServiceState
 	lastSweep time.Time
 	outages   map[string]*outage // by backend kind
+	// invalidWarned holds the invalid templates the team was told about.
+	invalidWarned map[string]bool
 }
 
 type serviceState struct {
@@ -228,6 +234,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	if err := d.Replay(); err != nil {
 		return err
 	}
+	d.validateTemplates(ctx)
 	events, err := d.Source.WatchRollouts(ctx)
 	if err != nil {
 		return fmt.Errorf("watch rollouts: %w", err)
@@ -284,8 +291,14 @@ func (d *Daemon) Replay() error {
 	d.services = map[string]*serviceState{}
 	d.sweeps = map[string]*sweepServiceState{}
 	d.lastSweep = time.Time{}
+	d.outages = map[string]*outage{}
+	d.invalidWarned = map[string]bool{}
 	skipped, err := d.Journal.Replay(func(rec journal.Record) error {
 		switch rec.Kind {
+		case KindOutage:
+			d.replayOutage(rec.Data)
+		case KindInvalidTemplate:
+			d.replayInvalidTemplate(rec.Data)
 		case KindRollout:
 			var rr rolloutRecord
 			if json.Unmarshal(rec.Data, &rr) == nil {
@@ -530,6 +543,7 @@ func (d *Daemon) check(ctx context.Context, rs *rolloutState, cp time.Duration, 
 	r := rs.rollout
 	opts := health.CheckOptions{Checkpoint: cp, BeforeEnd: d.beforeEnd(rs)}
 	report, err := d.Checker.CheckRollout(ctx, r, opts)
+	d.warnInvalidTemplates(ctx, r.Service, report.InvalidTemplates)
 	partial := false
 	if err != nil {
 		rs.retryAt = d.now().Add(retryAfter)

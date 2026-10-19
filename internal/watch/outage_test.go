@@ -1,6 +1,7 @@
 package watch
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -189,5 +190,59 @@ func TestSweepWithMetricsDownStillRecords(t *testing.T) {
 	h.due()
 	if n := h.count(KindSweep + " "); n != 2 {
 		t.Errorf("%d sweep records, want shop/api and shop/web", n)
+	}
+}
+
+// A daemon restarting more often than stale_after still warns: the
+// outage's start is in the journal, and so is the warning, which a
+// restart does not repeat.
+func TestOutageSurvivesRestarts(t *testing.T) {
+	h := newHarness(t)
+	tg := &fakeChannel{name: "telegram"}
+	notify := func() { h.d.Notifier = &Notifier{Channels: []provider.CommunicationProvider{tg}} }
+	notify()
+	ctx := context.Background()
+	fail := func(at time.Duration) {
+		h.at(at)
+		h.d.backendFailed(ctx, promDown, 2*time.Hour)
+	}
+
+	fail(0)
+	for _, at := range []time.Duration{50 * time.Minute, 100 * time.Minute} {
+		h.at(at).restart()
+		notify()
+		fail(at + time.Minute)
+	}
+	if got := tg.titles(); got != "" {
+		t.Fatalf("warned before stale_after: %q", got)
+	}
+	h.at(130 * time.Minute).restart()
+	notify()
+	fail(131 * time.Minute)
+	want := "[warning] rikugan cannot evaluate: metrics backend prometheus failing since 2026-10-18 12:00Z"
+	if got := tg.titles(); got != want {
+		t.Fatalf("messages after 2h11 of outage across restarts:\n%s\nwant:\n%s", got, want)
+	}
+
+	// Warned before the restart: not again.
+	h.at(140 * time.Minute).restart()
+	notify()
+	fail(141 * time.Minute)
+	if got := tg.titles(); got != want {
+		t.Errorf("warned again after a restart:\n%s", got)
+	}
+
+	// Back, then a restart: the outage is over for good.
+	h.at(150 * time.Minute)
+	h.d.backendOK(ctx, health.BackendMetrics)
+	h.at(160 * time.Minute).restart()
+	notify()
+	h.d.backendOK(ctx, health.BackendMetrics)
+	want += "\n[info] rikugan evaluates again: metrics backend prometheus back after 2h30m0s"
+	if got := tg.titles(); got != want {
+		t.Errorf("messages:\n%s\nwant:\n%s", got, want)
+	}
+	if n := h.count(KindOutage + " "); n != 3 {
+		t.Errorf("%d outage records, want failing, warned, back\n%s", n, strings.Join(h.records(), "\n"))
 	}
 }

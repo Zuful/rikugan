@@ -56,6 +56,8 @@ type fakeChecker struct {
 	// failing metrics backend.
 	verdict health.Status
 	err     error
+	// invalid is reported as the report's invalid templates.
+	invalid []health.InvalidTemplate
 }
 
 func (f *fakeChecker) CheckRollout(_ context.Context, r provider.Rollout, opts health.CheckOptions) (health.Report, error) {
@@ -69,7 +71,7 @@ func (f *fakeChecker) CheckRollout(_ context.Context, r provider.Rollout, opts h
 	if v == "" {
 		v = health.StatusOK
 	}
-	return health.Report{Rollout: r, Outcome: health.OutcomeEvaluated, Verdict: v, Checkpoint: opts.Checkpoint}, f.err
+	return health.Report{Rollout: r, Outcome: health.OutcomeEvaluated, Verdict: v, Checkpoint: opts.Checkpoint, InvalidTemplates: f.invalid}, f.err
 }
 
 func (f *fakeChecker) seen() string {

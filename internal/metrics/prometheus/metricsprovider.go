@@ -2,6 +2,7 @@ package prometheus
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -36,7 +37,7 @@ func (p *Provider) GetMetric(
 		Step:  step,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("prometheus query_range: %w", err)
+		return nil, fmt.Errorf("prometheus query_range: %w", classify(err))
 	}
 	matrix, ok := result.(model.Matrix)
 	if !ok {
@@ -193,4 +194,16 @@ func fmtVal(v float64) string {
 		return "n/a"
 	}
 	return fmt.Sprintf("%.3f", v)
+}
+
+// classify marks the errors Prometheus returns for the query itself:
+// bad_data (a parse error, a bad parameter) and execution (the query
+// fails on the data, e.g. a many-to-many match). Anything else, an
+// unreachable server, a timeout, a 5xx, is the backend failing.
+func classify(err error) error {
+	var perr *promv1.Error
+	if errors.As(err, &perr) && (perr.Type == promv1.ErrBadData || perr.Type == promv1.ErrExec) {
+		return fmt.Errorf("%w: %w", provider.ErrInvalidQuery, err)
+	}
+	return err
 }

@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 )
@@ -147,6 +148,13 @@ type MetricSample struct {
 	Value  float64
 	Labels map[string]string
 }
+
+// ErrInvalidQuery marks a metrics query the backend refused as a
+// query (a syntax error, an unknown function, an execution error), as
+// opposed to a backend that cannot answer (unreachable, timing out,
+// failing). GetMetric wraps it, so callers tell a wrong query from an
+// outage with errors.Is.
+var ErrInvalidQuery = errors.New("invalid query")
 
 // MetricsProvider exposes operational-shape metric retrieval.
 // Prometheus and kubectl top are the reference implementations.
