@@ -4,16 +4,31 @@
 // code label, and the http_request_duration_seconds histogram), plus
 // the process collector for memory and CPU.
 //
-// ERROR_RATE (0 to 1) is the share of requests answered with a 500.
-// LATENCY_MS adds that many milliseconds to every request.
-// CRASH=true makes it exit at once, so its pods never become ready.
-// OOM=true allocates memory until the container's limit kills it.
-// LEAK_MB_PER_MIN retains that many MiB more every minute.
-// LOAD_RPS is the traffic it generates on itself (default 20, so the
-// test needs no load generator); 0 leaves the load to `app loadgen`.
+// What a revision does wrong (the lab's scenarios):
 //
-// `app healthcheck` probes /healthz, for images without a shell, and
-// `app loadgen` sends traffic to other instances (see loadgen.go).
+//   - ERROR_RATE (0 to 1): the share of requests answered with a 500;
+//   - LATENCY_MS: milliseconds added to every request;
+//   - ERROR_FOR, LATENCY_FOR: how long after the start those last
+//     (default: for good), for a regression that recovers;
+//   - CRASH=true: exit at once, so the instance never becomes ready;
+//   - OOM=true: allocate until the container's limit kills it;
+//   - LEAK_MB_PER_MIN: retain that many MiB more every minute.
+//
+// Background noise, what a healthy service does anyway:
+//
+//   - NOISE_ERROR_RATE: sporadic 5xx;
+//   - TAIL_SHARE, TAIL_MS: a share of requests that take TAIL_MS more;
+//   - PAUSE_EVERY, PAUSE_MS: a stop-the-world pause, as a GC would.
+//
+// DEPENDENCY_URL, when set, is called by every request; when it fails,
+// the request is answered with a 503, as a service whose database is
+// down. LOAD_RPS is the traffic it generates on itself (default 20, so
+// the end-to-end test needs no load generator); 0 leaves the load to
+// `app loadgen`.
+//
+// `app healthcheck` probes /healthz, for images without a shell; `app
+// loadgen` sends traffic to other instances (loadgen.go); `app worker`
+// is a service without HTTP traffic (worker.go).
 package main
 
 import (
@@ -22,6 +37,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -38,32 +54,18 @@ func main() {
 		switch os.Args[1] {
 		case "healthcheck":
 			healthcheck()
-			return
 		case "loadgen":
 			loadgen()
-			return
+		case "worker":
+			worker()
 		default:
-			log.Fatal("unknown command: want healthcheck or loadgen")
+			log.Fatal("unknown command: want healthcheck, loadgen or worker")
 		}
+		return
 	}
-	if os.Getenv("CRASH") == "true" {
-		log.Fatal("CRASH=true: exiting")
-	}
-	if os.Getenv("OOM") == "true" {
-		go allocate(64, 100*time.Millisecond)
-	}
-	if mb, _ := strconv.Atoi(os.Getenv("LEAK_MB_PER_MIN")); mb > 0 {
-		go allocate(mb, time.Minute)
-	}
-	errorRate, _ := strconv.ParseFloat(os.Getenv("ERROR_RATE"), 64)
-	extra, _ := strconv.Atoi(os.Getenv("LATENCY_MS"))
-	rps := float64(defaultLoadRPS)
-	if raw := os.Getenv("LOAD_RPS"); raw != "" {
-		var err error
-		if rps, err = strconv.ParseFloat(raw, 64); err != nil || rps < 0 {
-			log.Fatal("LOAD_RPS: want a non-negative number of requests per second")
-		}
-	}
+	faults()
+	b := behaviourFromEnv(time.Now())
+	rps := envFloat("LOAD_RPS", defaultLoadRPS)
 
 	requests := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "http_requests_total", Help: "HTTP requests by status code.",
@@ -75,14 +77,24 @@ func main() {
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(requests, duration, collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
+	var pause sync.RWMutex
+	if b.pauseEvery > 0 {
+		go pauses(&pause, b.pauseEvery, b.pauseFor)
+	}
+	dep := &http.Client{Timeout: time.Second}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/work", func(w http.ResponseWriter, _ *http.Request) {
 		start := time.Now()
-		time.Sleep(time.Duration(5+extra+rand.IntN(10)) * time.Millisecond) // #nosec G404 -- test workload
-		code := http.StatusOK
-		if rand.Float64() < errorRate { // #nosec G404 -- test workload
-			code = http.StatusInternalServerError
+		// A pause, as a stop-the-world GC, holds every request: it waits
+		// for those in flight and keeps new ones until it ends.
+		pause.RLock()
+		defer pause.RUnlock()
+		delay, code := b.outcome(start.Sub(b.started), rand.Float64, rand.IntN) // #nosec G404 -- test workload
+		if code == http.StatusOK && b.dependency != "" && !reachable(dep, b.dependency) {
+			code = http.StatusServiceUnavailable
 		}
+		time.Sleep(delay)
 		w.WriteHeader(code)
 		requests.WithLabelValues(strconv.Itoa(code)).Inc()
 		duration.Observe(time.Since(start).Seconds())
@@ -95,6 +107,90 @@ func main() {
 	}
 	srv := &http.Server{Addr: ":8080", Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	log.Fatal(srv.ListenAndServe())
+}
+
+// faults applies the faults any kind of instance can have: a crash at
+// start, an OOM, a leak.
+func faults() {
+	if os.Getenv("CRASH") == "true" {
+		log.Fatal("CRASH=true: exiting")
+	}
+	if os.Getenv("OOM") == "true" {
+		go allocate(64, 100*time.Millisecond)
+	}
+	if mb := envInt("LEAK_MB_PER_MIN"); mb > 0 {
+		go allocate(mb, time.Minute)
+	}
+}
+
+// behaviour is what a request does: the revision's faults and the
+// background noise.
+type behaviour struct {
+	started    time.Time
+	errorRate  float64
+	errorFor   time.Duration // 0: for good
+	latency    time.Duration
+	latencyFor time.Duration
+	noiseError float64
+	tailShare  float64
+	tail       time.Duration
+	pauseEvery time.Duration
+	pauseFor   time.Duration
+	dependency string
+}
+
+func behaviourFromEnv(now time.Time) behaviour {
+	return behaviour{
+		started:    now,
+		errorRate:  envFloat("ERROR_RATE", 0),
+		errorFor:   envDuration("ERROR_FOR", 0),
+		latency:    time.Duration(envInt("LATENCY_MS")) * time.Millisecond,
+		latencyFor: envDuration("LATENCY_FOR", 0),
+		noiseError: envFloat("NOISE_ERROR_RATE", 0),
+		tailShare:  envFloat("TAIL_SHARE", 0),
+		tail:       time.Duration(envInt("TAIL_MS")) * time.Millisecond,
+		pauseEvery: envDuration("PAUSE_EVERY", 0),
+		pauseFor:   time.Duration(envInt("PAUSE_MS")) * time.Millisecond,
+		dependency: os.Getenv("DEPENDENCY_URL"),
+	}
+}
+
+// outcome draws a request's delay and status code, age after the
+// start. float and intn are the random source, injected for the tests.
+func (b behaviour) outcome(age time.Duration, float func() float64, intn func(int) int) (time.Duration, int) {
+	delay := time.Duration(5+intn(10)) * time.Millisecond
+	if b.latencyFor == 0 || age < b.latencyFor {
+		delay += b.latency
+	}
+	if b.tailShare > 0 && float() < b.tailShare {
+		delay += b.tail
+	}
+	errorRate := b.noiseError
+	if b.errorFor == 0 || age < b.errorFor {
+		errorRate = 1 - (1-b.errorRate)*(1-b.noiseError)
+	}
+	if errorRate > 0 && float() < errorRate {
+		return delay, http.StatusInternalServerError
+	}
+	return delay, http.StatusOK
+}
+
+// pauses stops every request for d, every interval.
+func pauses(pause *sync.RWMutex, every, d time.Duration) {
+	for range time.Tick(every) {
+		pause.Lock()
+		time.Sleep(d)
+		pause.Unlock()
+	}
+}
+
+func reachable(c *http.Client, url string) bool {
+	resp, err := c.Get(url)
+	if err != nil {
+		return false
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode < 500
 }
 
 // load calls /work on itself at a steady rate.
@@ -139,4 +235,16 @@ func healthcheck() {
 	if resp.StatusCode != http.StatusOK {
 		log.Fatalf("healthz: HTTP %d", resp.StatusCode)
 	}
+}
+
+func envInt(name string) int {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		log.Fatalf("%s: want a non-negative integer", name)
+	}
+	return n
 }

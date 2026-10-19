@@ -18,10 +18,13 @@ import (
 //
 //   - TARGETS: comma-separated url=rps, e.g.
 //     http://web:8080/work=20,http://api:8080/work=3 (rps is the mean);
-//   - CYCLE: the period of a sine on the rate (default 24h, 0 for flat),
-//     with AMPLITUDE its relative size (default 0.5: from 50 % to 150 %);
-//   - BURST_EVERY: the mean time between 5-minute bursts at three times
-//     the rate (default 0, none);
+//   - CYCLE: the period of a cosine on the rate (default 24h, 0 for
+//     flat), with AMPLITUDE its relative size (default 0.5: from 50 % to
+//     150 %), peaking at PEAK_AT (default 14h, UTC). The phase follows
+//     the wall clock, not the loadgen's start: a restart does not shift
+//     the day, which would read as a traffic change against yesterday;
+//   - BURST_EVERY: the mean time between bursts at three times the rate
+//     (default 0, none), each BURST_LENGTH long (default 5m);
 //   - NOISE: the relative size of minute-to-minute jitter (default 0.1).
 //
 // Keep-alives are off so each request resolves the name again and
@@ -33,11 +36,12 @@ func loadgen() {
 	}
 	cycle := envDuration("CYCLE", 24*time.Hour)
 	amplitude := envFloat("AMPLITUDE", 0.5)
+	peakAt := envDuration("PEAK_AT", 14*time.Hour)
 	burstEvery := envDuration("BURST_EVERY", 0)
+	burstLength := envDuration("BURST_LENGTH", 5*time.Minute)
 	noise := envFloat("NOISE", 0.1)
 
 	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{DisableKeepAlives: true}}
-	start := time.Now()
 	var burstUntil atomic.Int64 // unix nanoseconds
 	for _, t := range targets {
 		go func() {
@@ -48,9 +52,7 @@ func loadgen() {
 					jitter, jitterAt = 1+noise*(2*rand.Float64()-1), now // #nosec G404 -- test workload
 				}
 				factor := jitter
-				if cycle > 0 {
-					factor *= 1 + amplitude*math.Sin(2*math.Pi*float64(now.Sub(start))/float64(cycle))
-				}
+				factor *= dailyFactor(now, cycle, amplitude, peakAt)
 				if now.UnixNano() < burstUntil.Load() {
 					factor *= 3
 				}
@@ -68,10 +70,21 @@ func loadgen() {
 	log.Printf("loadgen: %d targets, cycle %s (±%.0f %%), bursts every %s on average", len(targets), cycle, amplitude*100, burstEvery)
 	for tick := time.NewTicker(time.Minute); ; <-tick.C {
 		if burstEvery > 0 && rand.Float64() < float64(time.Minute)/float64(burstEvery) { // #nosec G404 -- test workload
-			burstUntil.Store(time.Now().Add(5 * time.Minute).UnixNano())
-			log.Printf("burst: three times the rate for 5 minutes")
+			burstUntil.Store(time.Now().Add(burstLength).UnixNano())
+			log.Printf("burst: three times the rate for %s", burstLength)
 		}
 	}
+}
+
+// dailyFactor is the rate's multiple of its mean at t: a cosine of
+// period cycle peaking at peakAt past midnight UTC, the same at the same
+// hour every day.
+func dailyFactor(t time.Time, cycle time.Duration, amplitude float64, peakAt time.Duration) float64 {
+	if cycle <= 0 {
+		return 1
+	}
+	since := t.Sub(time.Unix(0, 0)) - peakAt
+	return 1 + amplitude*math.Cos(2*math.Pi*float64(since%cycle)/float64(cycle))
 }
 
 type target struct {

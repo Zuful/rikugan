@@ -7,19 +7,36 @@ every service every hour, and you compare what it says with what you
 broke. Everything runs in Docker; nothing is exposed beyond 127.0.0.1.
 
 ```
- rikugan-lab (compose.yaml)                    lab-shop (compose.shop.yaml)
- ┌─────────────┐   scrapes every replica   ┌──────────┐
- │ prometheus  │ ────────────────────────▶ │ web  ×1  │◀──┐
- └─────────────┘                           │ api  ×1  │◀──┤ ~20 and ~3 req/s,
- ┌─────────────┐   docker compose ps,      └──────────┘   │ daily cycle, bursts
- │ rikugan     │   inspect, events                        │
- │ serve       │ ── (Docker socket) ──▶ rollouts    ┌─────┴─────┐
- └─────────────┘                                    │  loadgen  │
-       │ Telegram / Slack                           └───────────┘
+ rikugan-lab (compose.yaml)               lab-shop (compose.shop.yaml)
+ ┌─────────────┐  scrapes every replica  ┌────────────────────────────┐
+ │ prometheus  │ ──────────────────────▶ │ web     busy, daily cycle  │──┐
+ └─────────────┘                         │ api     moderate traffic   │──┤ call
+ ┌─────────────┐  docker compose ps,     │ low     ~10 requests/min   │  │
+ │ rikugan     │  inspect, events        │ worker  no HTTP traffic    │  │
+ │ serve       │ ─ (Docker socket) ─▶    │ db      shared dependency  │◀─┘
+ └─────────────┘                         └────────────────────────────┘
+       │ Telegram / Slack                   ▲ web, api, low
+ ┌─────────────┐                            │
+ │ loadgen     │ ───────────────────────────┘
+ └─────────────┘
 ```
 
-`web` and `api` are the instrumented app of the end-to-end test
-(`test/e2e/app`), whose behaviour each scenario changes through its
+Every service is the instrumented app of the end-to-end test
+(`test/e2e/app`), with a profile of its own:
+
+| Service | Traffic | What it is for |
+|---|---|---|
+| `web` | ~20 req/s, a daily cycle (×0.5 at night, ×1.5 at 14:00 UTC), bursts | a busy API: false alarms on normal variation |
+| `api` | ~3 req/s | a moderate one |
+| `low` | ~10 req/min | under the volume guard (200 requests per window) most of the time: how often is it *insufficient data*? |
+| `worker` | none, a queue consumer | no request metrics at all: only restarts, availability and resources |
+| `db` | what web and api send it | the dependency they share: take it down and both fail together |
+
+`web`, `api` and `low` also carry background noise, what a healthy
+service does anyway: 0.2 % of sporadic 5xx, 1 % of requests 250 ms
+slower, a 150 ms pause every 2 minutes (as a GC would), and 90-second
+bursts at three times the traffic every 3 hours on average. False
+positives come from there. Each scenario changes a service's
 environment: a 5xx rate, extra latency, a crash at start, an OOM, a slow
 leak.
 
@@ -69,7 +86,13 @@ rollout with the 30 minutes before it, and Prometheus starts empty.
 | `slightly-slow` | +60 ms | latency `investigate`, never `degraded` |
 | `crash` | exits at start | rollout failed at the 5-minute deadline, restarts degraded; one critical |
 | `oom` | allocates until killed | rollout failed, restarts degraded, OOM kills reported |
+| `transient-errors` | 10 % of 5xx for its first 7 minutes | `degraded` at +5 (critical); about 4.7 % at +15, so `investigate` and a "recovered" message |
 | `leak` | retains 1 MiB more per minute | rollout `ok`; ~6 h later a sweep reports `memory_leak` investigate |
+
+`worker` takes only `healthy`, `crash`, `oom` and `leak`. The after
+window grows from the rollout's completion (+15 judges its first 15
+minutes), which is why a 30 % burst of 5xx for 7 minutes would still be
+degraded at +30: `transient-errors` is sized so that it recovers.
 
 After a bad revision, `./lab.sh deploy web healthy` is the fix-forward:
 rikugan judges it as a rollout of its own, and records the bad one's
@@ -79,10 +102,17 @@ Other levers:
 
 ```sh
 ./lab.sh traffic web 0.5       # very low traffic: under 200 requests per 5-minute window
+./lab.sh dependency stop       # db down: web and api fail together; dependency start ends it
 ./lab.sh prometheus stop       # a metrics outage; ./lab.sh prometheus start ends it
+./lab.sh prometheus wipe       # lose Prometheus' data: no J-1 or J-7 baseline left
 ./lab.sh chain web 10 15       # 10 healthy deploys, 15 minutes apart
+./lab.sh phase                 # where the daily cycle stands: deploy at a peak, or in a trough
 ./lab.sh verdicts 6h           # every verdict of the last 6 hours
 ```
+
+- **Shared dependency down:** web and api answer 503. Their sweeps go
+  degraded together and send one grouped message; a rollout of either
+  during the outage is judged on it too.
 
 - **Low traffic:** latency and error rate become insufficient data;
   only the blunt rule (5xx above 20 % with at least 10 errors) can still
@@ -114,6 +144,10 @@ hour with the same hour a day earlier (a week earlier once there is a
 week of data), and a quiet week tells how often rikugan raises a false
 alarm on traffic that only follows its daily cycle and random bursts.
 
+Then, deploy at the peak and in the trough of the day
+(`./lab.sh phase`): the traffic signal compares the after window with
+the before one and with the same time a week earlier.
+
 ## 5. Export the results
 
 ```sh
@@ -125,14 +159,21 @@ writes `export/<date>.tar.gz` with:
 - `verdicts.json` and `verdicts.csv`: every check and sweep of the last
   30 days, with its signals and notes;
 - `journal/`: rikugan's full journal, notifications included;
-- `actions.jsonl`: every `lab.sh` action with its time and the expected
-  verdict, to line up with the verdicts;
+- `actions.jsonl`: the ground truth, every `lab.sh` action with its
+  time, what was really injected (`severity`, `signals`, `lasts`, the
+  `services` affected), the traffic at that moment as a multiple of its
+  mean, and how rikugan is designed to react (`expected`). The truth is
+  what happened, not what rikugan can see: a 2 % error rate on `low`,
+  which rikugan has too few requests to judge, still counts as missed;
 - `serve.log`, `loadgen.log`.
 
 ## 6. Settings
 
-`.env` holds the traffic (`LAB_WEB_RPS`, `LAB_API_RPS`, `LAB_CYCLE`,
-`LAB_AMPLITUDE`, `LAB_BURST_EVERY`), the rollout deadline (5 min here,
+`.env` holds the traffic (`LAB_WEB_RPS`, `LAB_API_RPS`, `LAB_LOW_RPS`,
+`LAB_CYCLE`, `LAB_AMPLITUDE`, `LAB_PEAK_AT`, `LAB_BURST_EVERY`,
+`LAB_BURST_LENGTH`), the background noise (`LAB_NOISE_ERROR_RATE`,
+`LAB_TAIL_SHARE`, `LAB_TAIL_MS`, `LAB_PAUSE_EVERY`, `LAB_PAUSE_MS`),
+the shop's memory limit (`LAB_MEM_LIMIT`), the rollout deadline (5 min here,
 10 by default), the sweep interval (1 h here, 4 h by default) and the
 host ports. `health.yaml` is rikugan's health configuration: the request
 templates are the defaults, the memory and CPU templates read the app's

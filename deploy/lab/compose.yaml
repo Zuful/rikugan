@@ -27,10 +27,12 @@ services:
     restart: unless-stopped
     command: ["loadgen"]
     environment:
-      TARGETS: http://web:8080/work=${LAB_WEB_RPS:-20},http://api:8080/work=${LAB_API_RPS:-3}
+      TARGETS: http://web:8080/work=${LAB_WEB_RPS:-20},http://api:8080/work=${LAB_API_RPS:-3},http://low:8080/work=${LAB_LOW_RPS:-0.17}
       CYCLE: ${LAB_CYCLE:-24h}
       AMPLITUDE: ${LAB_AMPLITUDE:-0.5}
-      BURST_EVERY: ${LAB_BURST_EVERY:-6h}
+      PEAK_AT: ${LAB_PEAK_AT:-14h}
+      BURST_EVERY: ${LAB_BURST_EVERY:-3h}
+      BURST_LENGTH: ${LAB_BURST_LENGTH:-90s}
     networks: [lab]
 
   rikugan-serve:

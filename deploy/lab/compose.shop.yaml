@@ -1,13 +1,18 @@
-# The watched project: two services built from the same instrumented
-# app. ./lab.sh deploy rewrites state/<service>.env and recreates the
-# service, which Compose sees as a new revision (a new config-hash).
+# The watched project: services with different profiles, all built from
+# the instrumented app. ./lab.sh deploy rewrites state/<service>.env and
+# recreates the service, which Compose sees as a new revision (a new
+# config-hash).
+#
+#   web     busy, with a daily cycle; calls db
+#   api     moderate traffic; calls db
+#   low     about 10 requests a minute: mostly under the volume guard
+#   worker  no HTTP traffic at all
+#   db      the dependency web and api share
 name: lab-shop
 
 x-app: &app
   image: rikugan-lab-app:local
   restart: unless-stopped
-  environment:
-    LOAD_RPS: "0" # the traffic comes from the loadgen
   healthcheck:
     test: ["CMD", "/app", "healthcheck"]
     interval: 5s
@@ -16,13 +21,43 @@ x-app: &app
   mem_limit: ${LAB_MEM_LIMIT:-768m} # per replica
   networks: [lab]
 
+# What a healthy service does anyway: sporadic 5xx, a slow tail, short
+# pauses. This is what false alarms come from.
+x-noise: &noise
+  LOAD_RPS: "0" # the traffic comes from the loadgen
+  NOISE_ERROR_RATE: ${LAB_NOISE_ERROR_RATE:-0.002}
+  TAIL_SHARE: ${LAB_TAIL_SHARE:-0.01}
+  TAIL_MS: ${LAB_TAIL_MS:-250}
+  PAUSE_EVERY: ${LAB_PAUSE_EVERY:-2m}
+  PAUSE_MS: ${LAB_PAUSE_MS:-150}
+
 services:
   web:
     <<: *app
     env_file: state/web.env
+    environment:
+      <<: *noise
+      DEPENDENCY_URL: http://db:8080/work
   api:
     <<: *app
     env_file: state/api.env
+    environment:
+      <<: *noise
+      DEPENDENCY_URL: http://db:8080/work
+  low:
+    <<: *app
+    env_file: state/low.env
+    environment:
+      <<: *noise
+  worker:
+    <<: *app
+    command: ["worker"]
+    env_file: state/worker.env
+  db:
+    <<: *app
+    env_file: state/db.env
+    environment:
+      LOAD_RPS: "0"
 
 networks:
   lab:

@@ -63,12 +63,18 @@ more_rollouts() { [ "$(rollouts "$1")" -gt "$2" ]; }
 
 ./lab.sh up
 
-wait_for 120 "both services scraped, labelled namespace and service" \
-  equals 'count(up{namespace="lab-shop",service=~"web|api"} == 1)' 2
+wait_for 120 "the five services scraped, labelled namespace and service" \
+  equals 'count(up{namespace="lab-shop",service=~"web|api|low|worker|db"} == 1)' 5
 wait_for 120 "traffic from the loadgen on web" \
   positive 'sum(rate(http_requests_total{namespace="lab-shop",service="web"}[1m]))'
 wait_for 60 "traffic on api" \
   positive 'sum(rate(http_requests_total{namespace="lab-shop",service="api"}[1m]))'
+wait_for 120 "traffic on low" \
+  positive 'sum(increase(http_requests_total{namespace="lab-shop",service="low"}[2m]))'
+wait_for 60 "web and api call db" \
+  positive 'sum(rate(http_requests_total{namespace="lab-shop",service="db"}[1m]))'
+wait_for 60 "the worker's jobs" \
+  positive 'sum(worker_jobs_total{namespace="lab-shop",service="worker"})'
 wait_for 30 "memory per replica (the lab's memory template)" \
   positive 'avg(process_resident_memory_bytes{namespace="lab-shop",service="web"})'
 wait_for 60 "rikugan sees web's rollout" more_rollouts web 0
@@ -94,7 +100,19 @@ wait_for 60 "api's replica OOM-killed or restarted" oom_killed
 
 ./lab.sh prometheus stop
 ./lab.sh prometheus start
-wait_for 60 "Prometheus back" equals 'count(up{namespace="lab-shop",service=~"web|api"} == 1)' 2
+wait_for 60 "Prometheus back" equals 'count(up{namespace="lab-shop",service=~"web|api|low|worker|db"} == 1)' 5
+
+# The shared dependency down: web answers 503.
+./lab.sh dependency stop
+wait_for 120 "web answers 503 without db" \
+  positive 'sum(rate(http_requests_total{namespace="lab-shop",service="web",code="503"}[1m]))'
+./lab.sh dependency start
+./lab.sh deploy worker leak
+if ./lab.sh deploy worker errors 2>/dev/null; then
+  echo "an HTTP scenario was accepted for the worker" >&2
+  exit 1
+fi
+./lab.sh phase
 
 ./lab.sh verdicts >/dev/null
 ./lab.sh export
@@ -102,5 +120,6 @@ tarball=$(ls export/*.tar.gz)
 for f in verdicts.json verdicts.csv actions.jsonl serve.log journal/verdicts.jsonl; do
   tar -tzf "$tarball" | grep -q "/$f\$" || { echo "export lacks $f" >&2; exit 1; }
 done
-grep -q '"action":"deploy","service":"api","scenario":"oom"' state/actions.jsonl
+grep -q '"action":"deploy","service":"api","scenario":"oom","severity":"degraded","signals":\["restarts","availability"\]' state/actions.jsonl
+grep -q '"action":"dependency-stop".*"services":\["web","api"\]' state/actions.jsonl
 echo "lab smoke test passed"
