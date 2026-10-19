@@ -91,7 +91,8 @@ func TestEvaluate_Fixtures(t *testing.T) {
 		verdict    Verdict
 		signals    map[string]Status // only the signals the fixture is about
 		noteSubstr string
-		cfg        func(*Config) // adjusts DefaultConfig, when set
+		reasons    map[string]string // signal → substring of its reason
+		cfg        func(*Config)     // adjusts DefaultConfig, when set
 	}{
 		{
 			name:    "healthy deploy",
@@ -232,6 +233,66 @@ func TestEvaluate_Fixtures(t *testing.T) {
 				s.ErrorRate = after
 				return inputs(s, 15)
 			},
+			verdict: StatusDegraded,
+			signals: map[string]Status{SignalErrorRate: StatusDegraded},
+			reasons: map[string]string{SignalErrorRate: "0 errors before: no 5xx series before the rollout"},
+		},
+		{
+			name: "5xx series before, none after, requests after: zero errors after, said so",
+			in: func() Inputs {
+				s := healthy()
+				s.ErrorRate = until(s.ErrorRate, minute(-2))
+				return inputs(s, 15)
+			},
+			verdict: StatusOK,
+			signals: map[string]Status{SignalErrorRate: StatusOK},
+			reasons: map[string]string{SignalErrorRate: "0 errors after: no 5xx series after the rollout"},
+		},
+		{
+			name: "5xx series before, no request series after (target no longer scraped): never zero errors",
+			in: func() Inputs {
+				s := healthy()
+				s.RequestRate = until(s.RequestRate, minute(-2))
+				s.ErrorRate = until(s.ErrorRate, minute(-2))
+				return inputs(s, 15)
+			},
+			verdict: StatusInsufficientData,
+			signals: map[string]Status{SignalErrorRate: StatusInsufficientData},
+		},
+		{
+			name: "no request metric at all, error query padded with vector(0): error rate never 0%",
+			in: func() Inputs {
+				s := healthy()
+				s.RequestRate = nil
+				s.ErrorRate = profile(constant(0))
+				return inputs(s, 15)
+			},
+			verdict: StatusInsufficientData,
+			signals: map[string]Status{SignalErrorRate: StatusInsufficientData, SignalLatency: StatusInsufficientData},
+			reasons: map[string]string{SignalErrorRate: "no request-rate data"},
+		},
+		{
+			name: "no request metric at all at +5: the blunt rule cannot fire on vector(0)",
+			in: func() Inputs {
+				s := healthy()
+				s.RequestRate = nil
+				s.ErrorRate = profile(constant(0))
+				return inputs(s, 5)
+			},
+			verdict: StatusInsufficientData,
+			signals: map[string]Status{SignalErrorRate: StatusInsufficientData},
+		},
+		{
+			name: "chronically failing service (5xx 30% before and after) at +5: the blunt rule stays out",
+			in:   func() Inputs { return inputs(mediumTraffic(0.30, 0.30), 5) },
+			// 30% > 20% after with 15 errors, but it was already 30% before.
+			verdict: StatusInsufficientData,
+			signals: map[string]Status{SignalErrorRate: StatusInsufficientData},
+			reasons: map[string]string{SignalErrorRate: "blunt rule not applied: 5xx already 30.0% before the rollout"},
+		},
+		{
+			name:    "blunt regression from 15% before (below the blunt threshold) to 40% at +5: degraded",
+			in:      func() Inputs { return inputs(mediumTraffic(0.15, 0.40), 5) },
 			verdict: StatusDegraded,
 			signals: map[string]Status{SignalErrorRate: StatusDegraded},
 		},
@@ -454,8 +515,24 @@ func TestEvaluate_Fixtures(t *testing.T) {
 			if tc.noteSubstr != "" && !strings.Contains(strings.Join(r.Notes, "\n"), tc.noteSubstr) {
 				t.Errorf("notes %q lack %q", r.Notes, tc.noteSubstr)
 			}
+			for name, want := range tc.reasons {
+				if got, _ := r.Signal(name); !strings.Contains(got.Reason, want) {
+					t.Errorf("signal %s reason %q lacks %q", name, got.Reason, want)
+				}
+			}
 		})
 	}
+}
+
+// until keeps the samples before t: a series that stops existing.
+func until(s Series, t time.Time) Series {
+	var out Series
+	for _, p := range s {
+		if p.Time.Before(t) {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // mediumTraffic is ~10 requests a minute (300 over 30 minutes), with
