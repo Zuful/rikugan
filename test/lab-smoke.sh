@@ -114,12 +114,25 @@ if ./lab.sh deploy worker errors 2>/dev/null; then
 fi
 ./lab.sh phase
 
+# A day of synthetic past, ending where the lab's own data begins.
+./lab.sh history 1
+wait_for 60 "Prometheus back after the backfill" equals 'count(up{namespace="lab-shop",service=~"web|api|low|worker|db"} == 1)' 5
+wait_for 30 "web's traffic 12 hours ago, from the history" \
+  positive 'sum(rate(http_requests_total{namespace="lab-shop",service="web"}[1m] offset 12h))'
+wait_for 30 "a window p95 from the history" \
+  positive 'histogram_quantile(0.95, sum by (le) (increase(http_request_duration_seconds_bucket{namespace="lab-shop",service="web"}[900s] offset 12h)))'
+if ./lab.sh history 1 2>/dev/null; then
+  echo "a second history was loaded over the first" >&2
+  exit 1
+fi
+
 ./lab.sh verdicts >/dev/null
 ./lab.sh export
 tarball=$(ls export/*.tar.gz)
-for f in verdicts.json verdicts.csv actions.jsonl serve.log journal/verdicts.jsonl; do
+for f in verdicts.json verdicts.csv actions.jsonl serve.log journal/verdicts.jsonl report.md notifications.csv; do
   tar -tzf "$tarball" | grep -q "/$f\$" || { echo "export lacks $f" >&2; exit 1; }
 done
 grep -q '"action":"deploy","service":"api","scenario":"oom","severity":"degraded","signals":\["restarts","availability"\]' state/actions.jsonl
 grep -q '"action":"dependency-stop".*"services":\["web","api"\]' state/actions.jsonl
+tar -xzOf "$tarball" --wildcards '*/report.md' | grep -q '^## Criteria' || { echo "no criteria in the score" >&2; exit 1; }
 echo "lab smoke test passed"

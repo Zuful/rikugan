@@ -260,6 +260,42 @@ cmd_prometheus() { # stop|start|wipe
   esac
 }
 
+# prom_query prints the first value of a PromQL instant query, or
+# nothing.
+prom_query() {
+  curl -fsS "http://127.0.0.1:$(prom_port)/api/v1/query" --data-urlencode "query=$1" 2>/dev/null |
+    sed -n 's/.*"value":\[[^,]*,"\([^"]*\)"\].*/\1/p'
+}
+
+# cmd_history loads a synthetic past into Prometheus, so that sweeps
+# have their J-1 and J-7 baselines from the first day. It ends where
+# the lab's own data begins, so the two never overlap.
+cmd_history() { # [days]
+  days=${1:-8}
+  case "$days" in '' | *[!0-9]*) die "usage: ./lab.sh history [days]" ;; esac
+  [ -n "$(prom_query 'vector(1)')" ] || die "Prometheus does not answer: is the lab up?"
+  [ -z "$(prom_query 'count(http_requests_total{instance="history"})')" ] ||
+    die "a history is already loaded: ./lab.sh prometheus wipe first"
+  first=$(prom_query 'min(min_over_time(timestamp(up{job="shop"})[9d:1m]))')
+  end=$(date +%s)
+  [ -z "$first" ] || end=$(echo "$first" | cut -d. -f1)
+  end=$((end - 60))
+  web=$(env_value LAB_WEB_RPS)
+  api=$(env_value LAB_API_RPS)
+  low=$(env_value LAB_LOW_RPS)
+  echo "writing $days days of history, up to where the lab's own data begins (a minute to a few, and some memory: about 55 MB of samples a day)"
+  $LAB stop prometheus
+  docker run --rm \
+    -e TARGETS="http://web:8080/work=${web:-20},http://api:8080/work=${api:-3},http://low:8080/work=${low:-0.17}" \
+    -e CYCLE="$(env_value LAB_CYCLE)" -e AMPLITUDE="$(env_value LAB_AMPLITUDE)" -e PEAK_AT="$(env_value LAB_PEAK_AT)" \
+    -e NOISE_ERROR_RATE="$(env_value LAB_NOISE_ERROR_RATE)" -e TAIL_SHARE="$(env_value LAB_TAIL_SHARE)" -e TAIL_MS="$(env_value LAB_TAIL_MS)" \
+    rikugan-lab-app:local history -days "$days" -end "$end" |
+    docker run --rm -i -v rikugan-lab_prometheus-data:/prometheus --entrypoint /bin/promtool prom/prometheus:v3.5.0 \
+      tsdb create-blocks-from openmetrics /dev/stdin /prometheus >/dev/null
+  $LAB start prometheus
+  record history "" "$days days" none "" "" "sweeps compare with the same hour a day and a week earlier from now on"
+}
+
 cmd_phase() {
   cycle_awk '
     if (c <= 0) { printf "traffic flat at its mean: no daily cycle\n"; exit }
@@ -304,8 +340,9 @@ cmd_export() {
   cp state/actions.jsonl "$dir/"
   docker logs rikugan-lab-serve >"$dir/serve.log" 2>&1
   docker logs rikugan-lab-loadgen >"$dir/loadgen.log" 2>&1
+  docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/$dir:/export" rikugan-lab-app:local score /export >/dev/null
   tar -czf "$dir.tar.gz" -C export "$(basename "$dir")"
-  echo "exported to $dir.tar.gz"
+  echo "exported to $dir.tar.gz; the score is in $dir/report.md"
 }
 
 cmd_down() {
@@ -341,10 +378,11 @@ cmd_help() {
 ./lab.sh traffic <web|api|low> <rps>  change a service's mean traffic
 ./lab.sh dependency <stop|start>      take db, which web and api call, down
 ./lab.sh prometheus <stop|start|wipe> a metrics outage, or lose its data
+./lab.sh history [days]               load a synthetic past (default 8 days) for the sweeps' baselines
 ./lab.sh phase                        where the daily traffic cycle stands
 ./lab.sh verdicts [since]             rikugan's verdicts (default: last 24h)
 ./lab.sh status                       containers, scenarios, last verdicts
-./lab.sh export                       verdicts, journal and actions, as a .tar.gz
+./lab.sh export                       verdicts, journal, actions and the score, as a .tar.gz
 ./lab.sh down                         stop the lab, keep its data
 ./lab.sh reset                        delete the lab and its data
 
@@ -356,7 +394,7 @@ EOF
 command=${1:-help}
 [ $# -eq 0 ] || shift
 case "$command" in
-up | build | deploy | chain | traffic | dependency | prometheus | phase | verdicts | status | export | down | reset | scenarios | help)
+up | build | deploy | chain | traffic | dependency | prometheus | history | phase | verdicts | status | export | down | reset | scenarios | help)
   "cmd_$command" "$@"
   ;;
 *) cmd_help; exit 1 ;;

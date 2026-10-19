@@ -28,7 +28,9 @@
 //
 // `app healthcheck` probes /healthz, for images without a shell; `app
 // loadgen` sends traffic to other instances (loadgen.go); `app worker`
-// is a service without HTTP traffic (worker.go).
+// is a service without HTTP traffic (worker.go); `app score` compares a
+// lab export with its ground truth (score.go); `app history` writes a
+// synthetic past for Prometheus (history.go).
 package main
 
 import (
@@ -58,8 +60,12 @@ func main() {
 			loadgen()
 		case "worker":
 			worker()
+		case "score":
+			score()
+		case "history":
+			history()
 		default:
-			log.Fatal("unknown command: want healthcheck, loadgen or worker")
+			log.Fatal("unknown command: want healthcheck, loadgen, worker, score or history")
 		}
 		return
 	}
