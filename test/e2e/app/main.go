@@ -86,8 +86,10 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/work", func(w http.ResponseWriter, _ *http.Request) {
 		start := time.Now()
-		pause.RLock() // held off while a pause runs
-		pause.RUnlock()
+		// A pause, as a stop-the-world GC, holds every request: it waits
+		// for those in flight and keeps new ones until it ends.
+		pause.RLock()
+		defer pause.RUnlock()
 		delay, code := b.outcome(start.Sub(b.started), rand.Float64, rand.IntN) // #nosec G404 -- test workload
 		if code == http.StatusOK && b.dependency != "" && !reachable(dep, b.dependency) {
 			code = http.StatusServiceUnavailable
