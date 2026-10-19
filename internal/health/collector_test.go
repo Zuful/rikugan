@@ -142,10 +142,23 @@ func TestCollector_CompletedRollout(t *testing.T) {
 		t.Errorf("instances read for revision %q, want the rollout's", orch.revision)
 	}
 
-	// Five current queries over [start-30m, completion+15m], then the
-	// seasonal request rate over the same range a week earlier.
-	if len(m.calls) != 6 {
-		t.Fatalf("got %d metric queries, want 6: %+v", len(m.calls), m.calls)
+	// Five current queries over [start-30m, completion+15m], the
+	// seasonal request rate over the same range a week earlier, then the
+	// p95 of each window's requests, at its end.
+	if len(m.calls) != 8 {
+		t.Fatalf("got %d metric queries, want 8: %+v", len(m.calls), m.calls)
+	}
+	for i, w := range []struct {
+		at     time.Time
+		window string
+	}{{minute(-2), "[1800s]"}, {minute(15), "[900s]"}} {
+		call := m.calls[6+i]
+		if !call.start.Equal(w.at) || !call.end.Equal(w.at) || !strings.Contains(call.query, "increase(http_request_duration_seconds_bucket") || !strings.Contains(call.query, w.window) {
+			t.Errorf("window p95 query %+v, want %s at %s", call, w.window, w.at)
+		}
+	}
+	if lat, _ := r.Signal(SignalLatency); !strings.Contains(lat.Reason, "p95 over the window 120ms → 450ms") || strings.Contains(lat.Reason, "median") {
+		t.Errorf("latency must come from the window p95: %+v", lat)
 	}
 	wantFrom, wantTo := minute(-32), minute(15)
 	for _, call := range m.calls[:5] {
@@ -195,7 +208,7 @@ func TestCollector_UnaggregatedQueryIsSkipped(t *testing.T) {
 	if lat, _ := r.Signal(SignalLatency); lat.Status != StatusNotEvaluated {
 		t.Errorf("latency from a 3-series query: %+v", lat)
 	}
-	if !strings.Contains(strings.Join(r.Notes, " "), "returned 3 series") {
+	if !strings.Contains(strings.Join(r.Notes, " "), "latency window p95 query returned 3 series") {
 		t.Errorf("notes %q", r.Notes)
 	}
 }
@@ -231,6 +244,7 @@ services:
       rollout_unavailable_grace: 90s
       blunt_rule: false
       latency_degraded_from_checkpoint: 5m
+      latency_method: median
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -249,8 +263,18 @@ services:
 
 	cfg, _ = s.For(provider.Service{Namespace: "prod", Name: "checkout"})
 	if cfg.MinRequests != 50 || cfg.RolloutUnavailableGrace != 90*time.Second || cfg.UnavailableGrace != 2*time.Minute ||
-		cfg.BluntRule || cfg.LatencyDegradedFromCheckpoint != 5*time.Minute {
+		cfg.BluntRule || cfg.LatencyDegradedFromCheckpoint != 5*time.Minute || cfg.LatencyMethod != LatencyMedian {
 		t.Errorf("service section: %+v", cfg)
+	}
+	if cfg, _ := s.For(provider.Service{Namespace: "prod", Name: "api"}); cfg.LatencyMethod != LatencyWindow {
+		t.Errorf("default latency method %q", cfg.LatencyMethod)
+	}
+
+	if err := os.WriteFile(path, []byte("services:\n  prod/api:\n    thresholds:\n      latency_method: mean\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadSettings(path); err == nil || !strings.Contains(err.Error(), `latency_method "mean"`) {
+		t.Errorf("an unknown latency method must be rejected: %v", err)
 	}
 
 	if err := os.WriteFile(path, []byte("defaults:\n  thresholds:\n    min_request: 100\n"), 0o600); err != nil {

@@ -35,6 +35,9 @@ type SweepInputs struct {
 	// and Terminations restricted to what happened since the previous
 	// sweep.
 	Instances []provider.Instance
+	// LatencyWindow, when set, holds the p95 of the baseline hour
+	// (Before) and of the last hour (After), for the window method.
+	LatencyWindow *WindowP95
 	// FirstSweep is set when there is no previous sweep to count
 	// restarts from. RestartCount is then a lifetime total and is not
 	// used; Terminations hold those within the sweep window.
@@ -75,7 +78,7 @@ func EvaluateSweep(cfg Config, in SweepInputs) Report {
 	if in.Baseline != nil {
 		volume := volumeGuard(cfg, merged.RequestRate, before, after)
 		r.Signals = append(r.Signals,
-			latencySignal(cfg, merged, before, after, volume, SweepWindow),
+			latencySignal(cfg, merged, in.LatencyWindow, before, after, volume, SweepWindow),
 			errorRateSignal(cfg, merged, before, after, volume, SweepWindow),
 		)
 	} else {

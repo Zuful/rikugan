@@ -5,6 +5,7 @@
 // traffic so the test needs no load generator.
 //
 // ERROR_RATE (0 to 1) is the share of requests answered with a 500.
+// LATENCY_MS adds that many milliseconds to every request.
 // CRASH=true makes it exit at once, so its pods never become ready.
 package main
 
@@ -29,6 +30,7 @@ func main() {
 		log.Fatal("CRASH=true: exiting")
 	}
 	errorRate, _ := strconv.ParseFloat(os.Getenv("ERROR_RATE"), 64)
+	extra, _ := strconv.Atoi(os.Getenv("LATENCY_MS"))
 
 	requests := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "http_requests_total", Help: "HTTP requests by status code.",
@@ -43,7 +45,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/work", func(w http.ResponseWriter, _ *http.Request) {
 		start := time.Now()
-		time.Sleep(time.Duration(5+rand.IntN(10)) * time.Millisecond) // #nosec G404 -- test workload
+		time.Sleep(time.Duration(5+extra+rand.IntN(10)) * time.Millisecond) // #nosec G404 -- test workload
 		code := http.StatusOK
 		if rand.Float64() < errorRate { // #nosec G404 -- test workload
 			code = http.StatusInternalServerError

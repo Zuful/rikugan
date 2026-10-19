@@ -44,6 +44,16 @@ type Inputs struct {
 	// rollout's StartedAt: when this rollout follows another one closely,
 	// the before window must end where the last stable period did.
 	BeforeEnd time.Time
+	// LatencyWindow, when set, holds each window's p95 for the window
+	// method (Config.LatencyMethod).
+	LatencyWindow *WindowP95
+}
+
+// WindowP95 is the p95 of all the requests of the before and the after
+// window, as the metrics backend figures it from histogram buckets.
+type WindowP95 struct {
+	Before, After       float64
+	HasBefore, HasAfter bool
 }
 
 // SelectCheckpoint picks the latest checkpoint a completed rollout has
@@ -130,7 +140,7 @@ func Evaluate(cfg Config, in Inputs) Report {
 
 	volume := volumeGuard(cfg, in.Current.RequestRate, before, after)
 	r.Signals = append(r.Signals,
-		latencySignal(cfg, in.Current, before, after, volume, cp),
+		latencySignal(cfg, in.Current, in.LatencyWindow, before, after, volume, cp),
 		errorRateSignal(cfg, in.Current, before, after, volume, cp),
 	)
 	r.Signals = append(r.Signals, instanceSignals(cfg, in)...)
@@ -246,23 +256,30 @@ func volumeGuard(cfg Config, requests Series, before, after window) volumeCheck 
 	return vc
 }
 
-func latencySignal(cfg Config, s Signals, before, after window, vol volumeCheck, cp time.Duration) SignalResult {
+func latencySignal(cfg Config, s Signals, lw *WindowP95, before, after window, vol volumeCheck, cp time.Duration) SignalResult {
 	res := SignalResult{Name: SignalLatency}
 	if !vol.ok {
 		res.Status, res.Reason = StatusInsufficientData, vol.reason
 		return res
 	}
+	// The window method takes the p95 of all of each window's requests;
+	// the median method, the median of the per-minute p95, which a few
+	// warm-up minutes cannot drag but which is not a p95 of the window.
+	// Each figure is named for what it is.
+	label := "median p95 over the window"
 	b, okB := before.median(s.LatencyP95)
 	a, okA := after.median(s.LatencyP95)
+	if cfg.LatencyMethod != LatencyMedian && lw != nil {
+		label = "p95 over the window"
+		b, okB, a, okA = lw.Before, lw.HasBefore, lw.After, lw.HasAfter
+	}
 	if !okB || !okA {
 		res.Status, res.Reason = StatusNotEvaluated, "no latency data"
 		return res
 	}
 	delta := time.Duration((a - b) * float64(time.Second))
 	pct := relative(a, b)
-	// The figure is the median of the per-minute p95 over each window,
-	// not the p95 of the window's requests, and is named as such.
-	res.Reason = fmt.Sprintf("median p95 over the window %s → %s (%+.0f%%, %+s)", seconds(b), seconds(a), pct*100, delta.Round(time.Millisecond))
+	res.Reason = fmt.Sprintf("%s %s → %s (%+.0f%%, %+s)", label, seconds(b), seconds(a), pct*100, delta.Round(time.Millisecond))
 	switch {
 	case pct >= cfg.LatencyDegradedPct && delta >= cfg.LatencyDegradedAbs:
 		res.Status = StatusDegraded

@@ -80,13 +80,13 @@ func TestE2E_ServeChecksAndNotifiesRealRollouts(t *testing.T) {
 	ns := namespace(ctx, t, cs)
 
 	// Three services on their first revision, all healthy.
-	for _, name := range []string{"healthy", "errors", "crash"} {
+	for _, name := range []string{"healthy", "errors", "crash", "slow"} {
 		if _, err := cs.AppsV1().Deployments(ns).Create(ctx, deployment(name), metav1.CreateOptions{}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	source := deployk8s.New(cs, nil).WithNamespaces(ns)
-	for _, name := range []string{"healthy", "errors", "crash"} {
+	for _, name := range []string{"healthy", "errors", "crash", "slow"} {
 		waitRollout(ctx, t, source, ns, name, "1", provider.RolloutComplete)
 	}
 	t.Logf("first revisions complete; warming up for %s", warmUp)
@@ -136,6 +136,7 @@ func TestE2E_ServeChecksAndNotifiesRealRollouts(t *testing.T) {
 	setEnv(ctx, t, cs, ns, "healthy", "VERSION", "2")
 	setEnv(ctx, t, cs, ns, "errors", "ERROR_RATE", "0.5")
 	setEnv(ctx, t, cs, ns, "crash", "CRASH", "true")
+	setEnv(ctx, t, cs, ns, "slow", "LATENCY_MS", "300")
 
 	want := map[string]func(watch.Check) error{
 		"healthy": func(c watch.Check) error {
@@ -146,6 +147,21 @@ func TestE2E_ServeChecksAndNotifiesRealRollouts(t *testing.T) {
 		},
 		"crash": func(c watch.Check) error {
 			return expect(c, watch.FailureCheckpoint, health.StatusDegraded, map[string]health.Status{health.SignalRollout: health.StatusDegraded})
+		},
+		"slow": func(c watch.Check) error {
+			return expect(c, checkpoint, health.StatusDegraded, map[string]health.Status{health.SignalLatency: health.StatusDegraded})
+		},
+	}
+	// The same checks with the median method, logged side by side with
+	// the window method the daemon uses.
+	median := &health.Collector{
+		Metrics:       prometheus.NewFromAPI(promAPI),
+		Orchestration: orchk8s.NewFromClient(cs),
+		Deployments:   source,
+		Settings: func(svc provider.Service) (health.Config, health.Templates) {
+			cfg, tpl := config(svc)
+			cfg.LatencyMethod = health.LatencyMedian
+			return cfg, tpl
 		},
 	}
 	for len(want) > 0 {
@@ -163,6 +179,14 @@ func TestE2E_ServeChecksAndNotifiesRealRollouts(t *testing.T) {
 			if !pending || c.Rollout.Sequence != "2" {
 				continue
 			}
+			if c.Checkpoint != watch.FailureCheckpoint {
+				if m, err := median.CheckRollout(ctx, c.Rollout, health.CheckOptions{Checkpoint: c.Checkpoint}); err == nil {
+					w, _ := c.Report.Signal(health.SignalLatency)
+					med, _ := m.Signal(health.SignalLatency)
+					t.Logf("    latency, window method: %s %s", w.Status, w.Reason)
+					t.Logf("    latency, median method: %s %s", med.Status, med.Reason)
+				}
+			}
 			if err := check(c); err != nil {
 				t.Errorf("%s: %v", name, err)
 			}
@@ -177,6 +201,7 @@ func TestE2E_ServeChecksAndNotifiesRealRollouts(t *testing.T) {
 	for _, wantTitle := range []string{
 		fmt.Sprintf("[critical] %s/errors: revision 2 degraded (+%s)", ns, checkpoint),
 		fmt.Sprintf("[critical] %s/crash: revision 2 degraded (rollout failure)", ns),
+		fmt.Sprintf("[critical] %s/slow: revision 2 degraded (+%s)", ns, checkpoint),
 	} {
 		if !contains(got, wantTitle) {
 			t.Errorf("missing notification %q", wantTitle)
