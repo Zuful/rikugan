@@ -36,7 +36,8 @@ type SweepInputs struct {
 	// sweep.
 	Instances []provider.Instance
 	// FirstSweep is set when there is no previous sweep to count
-	// restarts from: restarts are then not evaluated.
+	// restarts from. RestartCount is then a lifetime total and is not
+	// used; Terminations hold those within the sweep window.
 	FirstSweep bool
 }
 
@@ -87,8 +88,7 @@ func EvaluateSweep(cfg Config, in SweepInputs) Report {
 
 	restarts := restartSignal(in.Instances)
 	if in.FirstSweep {
-		restarts = SignalResult{Name: SignalRestarts, Status: StatusNotEvaluated,
-			Reason: "first sweep: restart counts recorded, restarts are counted from the next sweep"}
+		restarts = firstSweepRestarts(in.Instances)
 	}
 	r.Signals = append(r.Signals, restarts, availabilitySignal(cfg, Inputs{Now: in.Now, Instances: in.Instances}))
 	r.Signals = append(r.Signals, saturationSignal(cfg, merged, before, after, SweepWindow))
@@ -97,6 +97,22 @@ func EvaluateSweep(cfg Config, in SweepInputs) Report {
 
 	r.Verdict = overall(r.Signals)
 	return r
+}
+
+// firstSweepRestarts evaluates restarts without a previous sweep. A
+// lifetime restart count would raise a false alarm whenever the daemon
+// starts, but what is a state or dated is sound evidence at once: an
+// instance crash-looping now, terminations (attested OOM kills
+// included) within the sweep window, each one a restart.
+func firstSweepRestarts(instances []provider.Instance) SignalResult {
+	dated := make([]provider.Instance, len(instances))
+	for i, inst := range instances {
+		dated[i] = inst
+		dated[i].RestartCount = len(inst.Terminations)
+	}
+	res := restartSignal(dated)
+	res.Reason = "first sweep, restarts counted from terminations in the last hour: " + res.Reason
+	return res
 }
 
 func ageLabel(age time.Duration) string {

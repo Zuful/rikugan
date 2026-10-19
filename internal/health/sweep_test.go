@@ -158,7 +158,7 @@ func TestEvaluateSweep(t *testing.T) {
 			signals: map[string]Status{SignalRestarts: StatusInvestigate},
 		},
 		{
-			name: "first sweep: restarts not evaluated",
+			name: "first sweep: a lifetime restart count alone raises nothing",
 			in: func() SweepInputs {
 				in := sweepIn(steady(), baselineOf(steady()))
 				in.Instances[0].RestartCount = 7
@@ -166,7 +166,55 @@ func TestEvaluateSweep(t *testing.T) {
 				return in
 			},
 			verdict: StatusOK,
-			signals: map[string]Status{SignalRestarts: StatusNotEvaluated},
+			signals: map[string]Status{SignalRestarts: StatusOK},
+		},
+		{
+			name: "first sweep: an instance crash-looping now is degraded at once",
+			in: func() SweepInputs {
+				in := sweepIn(steady(), baselineOf(steady()))
+				in.Instances[0].RestartCount = 40
+				in.Instances[0].CrashLooping = true
+				in.FirstSweep = true
+				return in
+			},
+			verdict: StatusDegraded,
+			signals: map[string]Status{SignalRestarts: StatusDegraded},
+		},
+		{
+			name: "first sweep: an attested OOM kill in the last hour is degraded at once",
+			in: func() SweepInputs {
+				in := sweepIn(steady(), baselineOf(steady()))
+				in.Instances[1].RestartCount = 3
+				in.Instances[1].Terminations = []provider.Termination{{Time: sweepNow.Add(-20 * time.Minute), Reason: "OOMKilled", ExitCode: 137, OOM: true}}
+				in.FirstSweep = true
+				return in
+			},
+			verdict: StatusDegraded,
+			signals: map[string]Status{SignalRestarts: StatusDegraded},
+		},
+		{
+			name: "first sweep: one termination in the last hour is one restart",
+			in: func() SweepInputs {
+				in := sweepIn(steady(), baselineOf(steady()))
+				in.Instances[1].RestartCount = 12
+				in.Instances[1].Terminations = []provider.Termination{{Time: sweepNow.Add(-20 * time.Minute), Reason: "Error", ExitCode: 1}}
+				in.FirstSweep = true
+				return in
+			},
+			verdict: StatusInvestigate,
+			signals: map[string]Status{SignalRestarts: StatusInvestigate},
+		},
+		{
+			name: "first sweep: an instance unready for long is degraded at once",
+			in: func() SweepInputs {
+				in := sweepIn(steady(), baselineOf(steady()))
+				in.Instances[2].Ready = false
+				in.Instances[2].NotReadySince = sweepNow.Add(-10 * time.Minute)
+				in.FirstSweep = true
+				return in
+			},
+			verdict: StatusDegraded,
+			signals: map[string]Status{SignalAvailability: StatusDegraded},
 		},
 		{
 			name: "baseline one day earlier is named",
@@ -294,7 +342,24 @@ func TestCollector_CheckSweep(t *testing.T) {
 		t.Errorf("instances of revision %q, want the current one", orch.revision)
 	}
 
-	if _, _, err := c.CheckSweep(context.Background(), svcAPI, nil); err != nil {
+	// First sweep: no previous counts. api-a's lifetime count of 5 is
+	// not used; only its termination in the last hour counts (the OOM
+	// kill 5 hours ago does not), and api-b has none.
+	orch.instances = []provider.Instance{
+		{Name: "api-a", Ready: true, RestartCount: 5, Terminations: []provider.Termination{
+			{Time: sweepNow.Add(-5 * time.Hour), Reason: "OOMKilled", OOM: true},
+			{Time: sweepNow.Add(-30 * time.Minute), Reason: "Error", ExitCode: 1},
+		}},
+		{Name: "api-b", Ready: true, RestartCount: 1},
+	}
+	r, counts, err = c.CheckSweep(context.Background(), svcAPI, nil)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if counts["api-a"] != 5 || counts["api-b"] != 1 {
+		t.Errorf("counts kept after a first sweep: %v", counts)
+	}
+	if s, _ := r.Signal(SignalRestarts); s.Status != StatusInvestigate || !strings.Contains(s.Reason, "first sweep") || !strings.Contains(s.Reason, "1 restart(s), 0 attested OOM") {
+		t.Errorf("first sweep restarts: %+v", s)
 	}
 }
