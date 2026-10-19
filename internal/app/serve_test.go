@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"net/http"
 	"reflect"
@@ -16,7 +17,7 @@ import (
 
 func TestServeNamespaces(t *testing.T) {
 	t.Setenv("RIKUGAN_SERVE_NAMESPACES", " shop, payments ,,")
-	got, err := serveNamespaces()
+	got, err := serveNamespaces("kubernetes")
 	if err != nil || !reflect.DeepEqual(got, []string{"shop", "payments"}) {
 		t.Errorf("got %v, %v", got, err)
 	}
@@ -24,8 +25,18 @@ func TestServeNamespaces(t *testing.T) {
 	// Outside a pod, with nothing configured: refuse rather than watch
 	// every namespace.
 	t.Setenv("RIKUGAN_SERVE_NAMESPACES", "")
-	if _, err := serveNamespaces(); err == nil || !strings.Contains(err.Error(), "RIKUGAN_SERVE_NAMESPACES") {
+	if _, err := serveNamespaces("kubernetes"); err == nil || !strings.Contains(err.Error(), "RIKUGAN_SERVE_NAMESPACES") {
 		t.Errorf("unconfigured outside a pod: %v", err)
+	}
+
+	// Docker Compose: the project.
+	t.Setenv("COMPOSE_PROJECT_NAME", "")
+	if _, err := serveNamespaces("dockercompose"); err == nil || !strings.Contains(err.Error(), "COMPOSE_PROJECT_NAME") {
+		t.Errorf("compose without a project: %v", err)
+	}
+	t.Setenv("COMPOSE_PROJECT_NAME", "web")
+	if got, err := serveNamespaces("dockercompose"); err != nil || !reflect.DeepEqual(got, []string{"web"}) {
+		t.Errorf("compose project: %v %v", got, err)
 	}
 }
 
@@ -94,5 +105,27 @@ func TestServeSweep(t *testing.T) {
 	t.Setenv("RIKUGAN_SWEEP_WARNING_PERSISTENCE", "0")
 	if _, err := serveSweep(nil, nil, nil); err == nil {
 		t.Error("persistence 0 accepted")
+	}
+}
+
+func TestServeBackendAndComposeDeadline(t *testing.T) {
+	if _, _, err := serveBackend("nomad", []string{"x"}, nil); err == nil {
+		t.Error("unknown backend accepted")
+	}
+	t.Setenv("RIKUGAN_COMPOSE_ROLLOUT_DEADLINE", "")
+	orch, src, err := serveBackend("dockercompose", []string{"web"}, slog.Default())
+	if err != nil || orch == nil || src.Name() != "deployments/docker-compose" {
+		t.Errorf("compose backend: %v %v %v", orch, src, err)
+	}
+	if d, _ := composeRolloutDeadline(); d != 10*time.Minute {
+		t.Errorf("default deadline %s", d)
+	}
+	t.Setenv("RIKUGAN_COMPOSE_ROLLOUT_DEADLINE", "3m")
+	if d, _ := composeRolloutDeadline(); d != 3*time.Minute {
+		t.Errorf("deadline %s", d)
+	}
+	t.Setenv("RIKUGAN_COMPOSE_ROLLOUT_DEADLINE", "1s")
+	if _, err := composeRolloutDeadline(); err == nil {
+		t.Error("1s accepted")
 	}
 }

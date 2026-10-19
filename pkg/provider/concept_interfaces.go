@@ -217,9 +217,11 @@ type Rollout struct {
 	// (Kubernetes pod-template-hash, Compose config-hash). It is the
 	// value OrchestrationProvider.GetRevisionInstances takes.
 	Revision string
-	// Sequence is the human-facing revision number when the backend
-	// has one (the Kubernetes deployment.kubernetes.io/revision), empty
-	// otherwise.
+	// Sequence is the human-facing name of the revision: its number
+	// when the backend has one (the Kubernetes
+	// deployment.kubernetes.io/revision), otherwise a short form of
+	// Revision (the first 12 characters of a Compose config-hash). Only
+	// numbers are ordered; compare rollouts by StartedAt otherwise.
 	Sequence string
 	Images   []string
 	Rollback bool
@@ -236,9 +238,8 @@ type Rollout struct {
 
 // DeploymentSource reports the rollouts of services (concept 5b in
 // docs/ontology.md: what runs in production and since when, as opposed
-// to versioning's what changed in the code). It ships with a single
-// backend, kubernetes; docs/ontology.md records why that exception to
-// the two-backend rule is accepted. dockercompose joins it next.
+// to versioning's what changed in the code). Its backends are kubernetes
+// and dockercompose.
 type DeploymentSource interface {
 	Provider
 	// LastRollout returns the service's current rollout: the one that

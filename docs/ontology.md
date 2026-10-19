@@ -19,7 +19,7 @@ planned but not yet on the critical path (P2).
 | 3 | Metrics | `metrics` | P0 | `MetricsProvider` | prometheus | newrelic (#6) |
 | 4 | Alerts | `alerts` | P0 | `AlertsProvider` | alertmanager, sentry, pagerduty | — |
 | 5a | Versioning — commits, diffs | `versioning` | P1 | none yet | github, gitlab | — |
-| 5b | Deployments — rollouts, deployed revisions | `deployments` | P1 | `DeploymentSource` | kubernetes | dockercompose (proactive mode phase 2), argocd (phase 3) |
+| 5b | Deployments — rollouts, deployed revisions | `deployments` | P1 | `DeploymentSource` | kubernetes, dockercompose | argocd (proactive mode phase 3) |
 | 6 | Incidents and tickets | `incidents` | P1 | none yet | none as a concept — see below | — |
 | 7 | Team communication | `communication` | P1 | `CommunicationProvider` | telegram, slack | GitHub commit comment (proactive mode phase 3) |
 | 8 | CI/CD | `cicd` | P2 | none yet | none | — |
@@ -133,6 +133,16 @@ Being wrong here costs one refactor of a small, internal interface.
 **Closing criterion:** the PR that adds the dockercompose
 `DeploymentSource` (phase 2) states explicitly whether the interface
 held as is or had to change.
+
+**Closed in phase 2:** the methods held as they were (`LastRollout`,
+`WatchRollouts`, the `Rollout` fields and states). One definition
+widened: `Rollout.Sequence` was "the revision number, empty when the
+backend has none"; Compose has none, and the daemon needs a name for
+every revision, so `Sequence` is now the revision number when there is
+one and a short form of `Revision` otherwise (the first 12 characters of
+the config-hash), and rollouts are ordered by `StartedAt` rather than by
+`Sequence`. Kubernetes leaked into the interface only there. The
+exception to the rule is over: the concept has two backends.
 
 `deployments` is not the only concept with a single-backend interface.
 `LogsProvider` (loki only) and `MetricsProvider` (prometheus only) are

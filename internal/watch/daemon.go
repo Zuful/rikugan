@@ -627,9 +627,14 @@ func (st *serviceState) prune() {
 	}
 }
 
-// newer reports whether a is a later rollout than b: by revision number
-// when both have one, by start time otherwise.
+// newer reports whether a is a later rollout than b: by start time when
+// both have one, by revision number otherwise (a skipped revision is
+// known by its number alone). Start times come first because not every
+// backend numbers its revisions: a Compose revision is a config-hash.
 func newer(a, b provider.Rollout) bool {
+	if !a.StartedAt.IsZero() && !b.StartedAt.IsZero() && !a.StartedAt.Equal(b.StartedAt) {
+		return a.StartedAt.After(b.StartedAt)
+	}
 	na, errA := strconv.Atoi(a.Sequence)
 	nb, errB := strconv.Atoi(b.Sequence)
 	if errA == nil && errB == nil {

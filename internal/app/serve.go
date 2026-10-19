@@ -12,9 +12,11 @@ import (
 	"time"
 
 	"github.com/Zuful/rikugan/internal/communication"
+	deploydc "github.com/Zuful/rikugan/internal/deployments/dockercompose"
 	deployk8s "github.com/Zuful/rikugan/internal/deployments/kubernetes"
 	"github.com/Zuful/rikugan/internal/health"
 	"github.com/Zuful/rikugan/internal/metrics/prometheus"
+	"github.com/Zuful/rikugan/internal/orchestration/dockercompose"
 	orchk8s "github.com/Zuful/rikugan/internal/orchestration/kubernetes"
 	"github.com/Zuful/rikugan/internal/watch"
 	"github.com/Zuful/rikugan/internal/watch/journal"
@@ -40,8 +42,9 @@ const serviceAccountNamespace = "/var/run/secrets/kubernetes.io/serviceaccount/n
 // under the state directory. verdicts receives one structured line per
 // check, the copy log pipelines read.
 //
-// Rollout detection is Kubernetes-only until the Docker Compose
-// DeploymentSource lands, and a metrics backend is required.
+// The orchestration backend (ORCHESTRATION_PROVIDER: kubernetes or
+// dockercompose) also detects the rollouts; a metrics backend is
+// required.
 func Serve(ctx context.Context, logger, verdicts *slog.Logger) error {
 	listen := os.Getenv("RIKUGAN_SERVE_LISTEN")
 	if listen == "" {
@@ -62,18 +65,19 @@ func Serve(ctx context.Context, logger, verdicts *slog.Logger) error {
 	}
 	defer func() { _ = release() }()
 
-	if backend := os.Getenv("ORCHESTRATION_PROVIDER"); backend != "" && backend != "kubernetes" {
-		return fmt.Errorf("rikugan serve detects rollouts on kubernetes only for now; ORCHESTRATION_PROVIDER is %q", backend)
-	}
-	k8sClient, err := pkgk8s.BuildClient("")
-	if err != nil {
-		return fmt.Errorf("build k8s client: %w", err)
-	}
 	promAPI, err := prometheus.BuildAPI("")
 	if err != nil {
 		return fmt.Errorf("rikugan serve needs a metrics backend: %w", err)
 	}
-	namespaces, err := serveNamespaces()
+	backend := os.Getenv("ORCHESTRATION_PROVIDER")
+	if backend == "" {
+		backend = "kubernetes"
+	}
+	namespaces, err := serveNamespaces(backend)
+	if err != nil {
+		return err
+	}
+	orchestration, source, err := serveBackend(backend, namespaces, logger)
 	if err != nil {
 		return err
 	}
@@ -93,8 +97,6 @@ func Serve(ctx context.Context, logger, verdicts *slog.Logger) error {
 	}
 	defer func() { _ = j.Close() }()
 
-	source := deployk8s.New(k8sClient, logger).WithNamespaces(namespaces...)
-	orchestration := orchk8s.NewFromClient(k8sClient, orchk8s.WithLogger(logger))
 	collector := &health.Collector{
 		Metrics:       prometheus.NewFromAPI(promAPI, prometheus.WithLogger(logger)),
 		Orchestration: orchestration,
@@ -155,6 +157,43 @@ func runWithAPI(ctx context.Context, daemon *watch.Daemon, srv *http.Server) err
 		return aerr
 	}
 	return err
+}
+
+// serveBackend builds the orchestration provider and the matching
+// DeploymentSource for the watched namespaces (Compose projects on
+// Docker Compose).
+func serveBackend(backend string, namespaces []string, logger *slog.Logger) (provider.OrchestrationProvider, provider.DeploymentSource, error) {
+	switch backend {
+	case "kubernetes":
+		k8sClient, err := pkgk8s.BuildClient("")
+		if err != nil {
+			return nil, nil, fmt.Errorf("build k8s client: %w", err)
+		}
+		return orchk8s.NewFromClient(k8sClient, orchk8s.WithLogger(logger)),
+			deployk8s.New(k8sClient, logger).WithNamespaces(namespaces...), nil
+	case "dockercompose":
+		deadline, err := composeRolloutDeadline()
+		if err != nil {
+			return nil, nil, err
+		}
+		orch := dockercompose.New(dockercompose.WithLogger(logger), dockercompose.WithProject(namespaces[0]))
+		return orch, deploydc.New(orch, deploydc.WithProjects(namespaces...), deploydc.WithRolloutDeadline(deadline), deploydc.WithLogger(logger)), nil
+	}
+	return nil, nil, fmt.Errorf("ORCHESTRATION_PROVIDER=%q: rikugan serve supports kubernetes and dockercompose", backend)
+}
+
+// composeRolloutDeadline reads RIKUGAN_COMPOSE_ROLLOUT_DEADLINE
+// (compose_rollout_deadline, default 10m).
+func composeRolloutDeadline() (time.Duration, error) {
+	raw := os.Getenv("RIKUGAN_COMPOSE_ROLLOUT_DEADLINE")
+	if raw == "" {
+		return deploydc.DefaultRolloutDeadline, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d < 10*time.Second {
+		return 0, fmt.Errorf("RIKUGAN_COMPOSE_ROLLOUT_DEADLINE: want a duration of at least 10s, such as 10m; got %q", raw)
+	}
+	return d, nil
 }
 
 // serveSweep reads the periodic sweep's settings (design §6):
@@ -228,11 +267,18 @@ func serveNotifier(logger *slog.Logger) (*watch.Notifier, error) {
 
 // serveNamespaces returns the namespaces whose rollouts are watched:
 // RIKUGAN_SERVE_NAMESPACES (comma-separated) or, when unset, the
-// namespace rikugan itself runs in. Watching everything would need
+// namespace rikugan itself runs in; on Docker Compose, the projects, by
+// default COMPOSE_PROJECT_NAME. Watching everything would need
 // cluster-wide rights, so it is never the silent default.
-func serveNamespaces() ([]string, error) {
+func serveNamespaces(backend string) ([]string, error) {
 	if out := splitList(os.Getenv("RIKUGAN_SERVE_NAMESPACES")); len(out) > 0 {
 		return out, nil
+	}
+	if backend == "dockercompose" {
+		if p := os.Getenv("COMPOSE_PROJECT_NAME"); p != "" {
+			return []string{p}, nil
+		}
+		return nil, errors.New("set COMPOSE_PROJECT_NAME (or RIKUGAN_SERVE_NAMESPACES): the Compose project whose services rikugan serve watches")
 	}
 	raw, err := os.ReadFile(serviceAccountNamespace)
 	if err != nil {

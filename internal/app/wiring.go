@@ -92,9 +92,8 @@ func Setup(logger *slog.Logger, version string) (*server.MCPServer, error) {
 	}
 
 	// ── Deploy health (correlation): check_deploy_health reads the
-	//    deployments, orchestration and metrics concepts. The only
-	//    DeploymentSource today is Kubernetes, so it needs the
-	//    kubernetes orchestration backend and a metrics backend.
+	//    deployments, orchestration and metrics concepts; the
+	//    DeploymentSource follows the orchestration backend.
 	if err := registerDeployHealth(d, k8sClient, orch, metricsProvider, logger); err != nil {
 		return nil, err
 	}

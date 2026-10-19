@@ -13,6 +13,7 @@ import (
 	"github.com/Zuful/rikugan/internal/alerts/pagerduty"
 	"github.com/Zuful/rikugan/internal/alerts/sentry"
 	"github.com/Zuful/rikugan/internal/correlation/deployhealth"
+	deploydc "github.com/Zuful/rikugan/internal/deployments/dockercompose"
 	deployk8s "github.com/Zuful/rikugan/internal/deployments/kubernetes"
 	"github.com/Zuful/rikugan/internal/health"
 	"github.com/Zuful/rikugan/internal/logs"
@@ -234,21 +235,35 @@ func primaryAlertsBackend(available []alertsBackend, logger *slog.Logger) (alert
 }
 
 // registerDeployHealth registers check_deploy_health when its three
-// concepts are available: a Kubernetes DeploymentSource (the only one
-// so far, so the orchestration backend must be kubernetes too — the
-// instances it reads come from the same cluster) and a metrics backend.
+// concepts are available: a DeploymentSource matching the orchestration
+// backend (kubernetes or dockercompose: the instances it reads come from
+// the same runtime) and a metrics backend.
 // Thresholds and query templates can be overridden per service with the
 // YAML file named by RIKUGAN_HEALTH_CONFIG.
 func registerDeployHealth(d *dispatcher.Dispatcher, k8sClient kubernetes.Interface, orch provider.OrchestrationProvider, metricsProvider provider.MetricsProvider, logger *slog.Logger) error {
-	if metricsProvider == nil || k8sClient == nil {
+	if metricsProvider == nil {
 		logger.Warn("check_deploy_health not available, skipping",
-			slog.String("reason", "needs a metrics backend and a kubernetes cluster"),
+			slog.String("reason", "needs a metrics backend"),
 		)
 		return nil
 	}
-	if _, ok := orch.(*orchk8s.Provider); !ok {
+	var source provider.DeploymentSource
+	switch o := orch.(type) {
+	case *orchk8s.Provider:
+		if k8sClient == nil {
+			logger.Warn("check_deploy_health not available, skipping", slog.String("reason", "no kubernetes client"))
+			return nil
+		}
+		source = deployk8s.New(k8sClient, logger)
+	case *dockercompose.Provider:
+		deadline, err := composeRolloutDeadline()
+		if err != nil {
+			return err
+		}
+		source = deploydc.New(o, deploydc.WithRolloutDeadline(deadline), deploydc.WithLogger(logger))
+	default:
 		logger.Warn("check_deploy_health not available, skipping",
-			slog.String("reason", "rollout detection is kubernetes-only for now; ORCHESTRATION_PROVIDER is not kubernetes"),
+			slog.String("reason", "no rollout detection for this orchestration backend"),
 		)
 		return nil
 	}
@@ -259,7 +274,7 @@ func registerDeployHealth(d *dispatcher.Dispatcher, k8sClient kubernetes.Interfa
 	collector := &health.Collector{
 		Metrics:       metricsProvider,
 		Orchestration: orch,
-		Deployments:   deployk8s.New(k8sClient, logger),
+		Deployments:   source,
 		Settings:      settings.For,
 	}
 	if err := d.Register(deployhealth.New(collector, logger)); err != nil {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strconv"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -12,6 +11,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 
+	"github.com/Zuful/rikugan/internal/deployments/tracker"
 	"github.com/Zuful/rikugan/pkg/provider"
 )
 
@@ -87,7 +87,7 @@ func (p *Provider) WatchRollouts(ctx context.Context) (<-chan provider.Rollout, 
 		if !cache.WaitForCacheSync(ctx.Done(), synced...) {
 			return
 		}
-		t := newTracker()
+		t := tracker.New()
 		for p.processNext(ctx, queue, t, out) {
 		}
 	}()
@@ -96,7 +96,7 @@ func (p *Provider) WatchRollouts(ctx context.Context) (<-chan provider.Rollout, 
 
 // processNext reconstructs one queued Deployment's rollout and emits
 // what changed. It returns false once the queue is shut down.
-func (p *Provider) processNext(ctx context.Context, queue workqueue.TypedRateLimitingInterface[string], t *tracker, out chan<- provider.Rollout) bool {
+func (p *Provider) processNext(ctx context.Context, queue workqueue.TypedRateLimitingInterface[string], t *tracker.Tracker, out chan<- provider.Rollout) bool {
 	key, shutdown := queue.Get()
 	if shutdown {
 		return false
@@ -111,7 +111,7 @@ func (p *Provider) processNext(ctx context.Context, queue workqueue.TypedRateLim
 	r, err := p.LastRollout(ctx, provider.Service{Name: name, Namespace: ns, Kind: "deployment"})
 	switch {
 	case apierrors.IsNotFound(err):
-		t.forget(key)
+		t.Forget(key)
 		queue.Forget(key)
 		return true
 	case err != nil:
@@ -127,7 +127,7 @@ func (p *Provider) processNext(ctx context.Context, queue workqueue.TypedRateLim
 	}
 	queue.Forget(key)
 
-	for _, ev := range t.observe(key, r) {
+	for _, ev := range t.Observe(key, r) {
 		select {
 		case out <- ev:
 		case <-ctx.Done():
@@ -135,74 +135,4 @@ func (p *Provider) processNext(ctx context.Context, queue workqueue.TypedRateLim
 		}
 	}
 	return true
-}
-
-// tracker remembers, per Deployment, the last rollout seen and the
-// states already reported, so each (sequence, state) is emitted once.
-type tracker struct {
-	last map[string]tracked
-}
-
-type tracked struct {
-	rollout  provider.Rollout
-	reported map[provider.RolloutState]bool
-}
-
-func newTracker() *tracker { return &tracker{last: map[string]tracked{}} }
-
-func (t *tracker) forget(key string) { delete(t.last, key) }
-
-// observe takes the Deployment's current rollout and returns what to
-// report, oldest first:
-//   - the previous rollout, as superseded, if a newer one started before
-//     it ended;
-//   - a superseded rollout for every revision number skipped between two
-//     observations: two rollouts can start before the first event is
-//     processed, and the reconstruction only ever sees the last one;
-//   - the current rollout, if it has ended in a state not reported yet.
-func (t *tracker) observe(key string, r provider.Rollout) []provider.Rollout {
-	var out []provider.Rollout
-	prev, seen := t.last[key]
-	if seen && prev.rollout.Sequence != r.Sequence {
-		if !prev.ended() {
-			s := prev.rollout
-			s.State = provider.RolloutSuperseded
-			out = append(out, s)
-		}
-		out = append(out, skipped(prev.rollout, r)...)
-		prev = tracked{}
-	}
-	if prev.reported == nil {
-		prev.reported = map[provider.RolloutState]bool{}
-	}
-	prev.rollout = r
-	if (r.State == provider.RolloutComplete || r.State == provider.RolloutFailed) && !prev.reported[r.State] {
-		prev.reported[r.State] = true
-		out = append(out, r)
-	}
-	t.last[key] = prev
-	return out
-}
-
-// ended reports whether the rollout completed or failed: a newer one
-// does not supersede it.
-func (tr tracked) ended() bool {
-	return tr.reported[provider.RolloutComplete] || tr.reported[provider.RolloutFailed] ||
-		tr.rollout.State == provider.RolloutComplete || tr.rollout.State == provider.RolloutFailed
-}
-
-// skipped returns a superseded rollout for each revision number strictly
-// between prev and cur. Only the service and the sequence are known: the
-// reconstruction never saw them.
-func skipped(prev, cur provider.Rollout) []provider.Rollout {
-	from, err1 := strconv.Atoi(prev.Sequence)
-	to, err2 := strconv.Atoi(cur.Sequence)
-	if err1 != nil || err2 != nil || to-from > 100 { // a gap that large is not a burst of rollouts
-		return nil
-	}
-	var out []provider.Rollout
-	for n := from + 1; n < to; n++ {
-		out = append(out, provider.Rollout{Service: cur.Service, Sequence: strconv.Itoa(n), State: provider.RolloutSuperseded})
-	}
-	return out
 }
