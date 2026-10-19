@@ -70,6 +70,15 @@ last verdicts. Prometheus is at http://127.0.0.1:9090: try
 **Wait 30 minutes before the first deploy.** Rikugan compares each
 rollout with the 30 minutes before it, and Prometheus starts empty.
 
+**Give the sweeps a past.** A sweep compares each hour with the same
+hour a week earlier, or a day earlier, and finds neither in a fresh
+Prometheus. `./lab.sh history` loads 8 days of synthetic past, shaped
+like the lab (the same daily cycle, traffic and noise, drawn by the
+same code), ending where the lab's own data begins so that the two
+never add up. It takes a minute or two and about 55 MB of samples a
+day, streamed into `promtool`; Prometheus is stopped meanwhile. It
+loads once: after `./lab.sh prometheus wipe`, load it again.
+
 ## 3. Deploy
 
 ```sh
@@ -126,7 +135,40 @@ Other levers:
   recorded `superseded`; after 2 h of back-to-back deploys there is no
   credible "before" window left, and latency and errors are not compared.
 
-## 4. A first session
+## 4. The measurement
+
+Two uses, kept apart:
+
+- **Calibration, in real time, on a machine that does not sleep (a
+  server):** false alarms, how often there is too little data, how fast
+  a regression is notified. Everything in rikugan is tied to physical
+  time: warm-up, grace periods, rate windows, the number of requests in
+  a window that the volume guard counts. Speeding the clock up would
+  change exactly what is measured.
+- **Logic, anywhere, at any pace (a laptop):** the state machines,
+  grouping, catch-up after a stop, "recovered" messages. A laptop going
+  to sleep is itself a good test of the catch-up and of backend
+  outages, just not during a measurement.
+
+**Criteria, fixed before the run** (the score checks them; changing
+them after seeing the results defeats the purpose):
+
+1. No critical without a regression behind it, over at least 72 hours of
+   calm (only healthy deploys, background noise, the daily cycle).
+   Warnings without one are counted per day.
+2. Every frank regression (a `degraded` truth) detected, and those
+   deployed notified within 10 minutes of the deploy (20 for latency,
+   which v3.5 caps at investigate at +5).
+3. How often rollouts are *insufficient data*, by service profile: no
+   threshold, it is what the fallback A vs B decision is made on.
+4. For each notification, a human answer: reading it at 4 a.m., would
+   you know what to do? (`notifications.csv`, `actionable_at_4am`.)
+
+A run: `up`, `history`, then 72 hours of calm with a few `deploy …
+healthy` at different times of day, then the scenarios below, one at a
+time, each after the previous one's +30.
+
+## 5. A first session
 
 A suggested half-day, one deploy at a time, each after the previous
 one's +30 checkpoint:
@@ -148,7 +190,7 @@ Then, deploy at the peak and in the trough of the day
 (`./lab.sh phase`): the traffic signal compares the after window with
 the before one and with the same time a week earlier.
 
-## 5. Export the results
+## 6. Export and score
 
 ```sh
 ./lab.sh export
@@ -165,9 +207,21 @@ writes `export/<date>.tar.gz` with:
   mean, and how rikugan is designed to react (`expected`). The truth is
   what happened, not what rikugan can see: a 2 % error rate on `low`,
   which rikugan has too few requests to judge, still counts as missed;
-- `serve.log`, `loadgen.log`.
+- `serve.log`, `loadgen.log`;
+- `report.md`, the score: each criterion above passed or failed; every
+  injection, detected or not, with the highest status reached and the
+  delay to the first notification; for each checkpoint and signal, the
+  true and false positives and negatives and how often it was not
+  evaluated; every notification without a regression behind it;
+- `notifications.csv`, every notification with whether a regression
+  was behind it, and the `actionable_at_4am` column to fill in.
 
-## 6. Settings
+The score is computed by `app score` (`test/e2e/app/score.go`) from the
+journal and `actions.jsonl` alone: an injection runs from its action to
+the next deploy of the service (or the dependency back, or the end of
+what it `lasts`), and its effects are accepted for 45 minutes more.
+
+## 7. Settings
 
 `.env` holds the traffic (`LAB_WEB_RPS`, `LAB_API_RPS`, `LAB_LOW_RPS`,
 `LAB_CYCLE`, `LAB_AMPLITUDE`, `LAB_PEAK_AT`, `LAB_BURST_EVERY`,
@@ -180,7 +234,7 @@ templates are the defaults, the memory and CPU templates read the app's
 process metrics instead of Kubernetes' cAdvisor ones. Run `./lab.sh up`
 after a change.
 
-## 7. Stop
+## 8. Stop
 
 ```sh
 ./lab.sh down     # stop, keep Prometheus' data and rikugan's journal
