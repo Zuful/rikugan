@@ -21,6 +21,7 @@ services:
     read_only: true
     tmpfs:
       - /run
+      - /tmp # the entrypoint writes haproxy.cfg there
 
   rikugan-serve:
     depends_on:
