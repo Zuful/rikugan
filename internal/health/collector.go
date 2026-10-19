@@ -227,7 +227,8 @@ type PreviousSweep struct {
 // Restarts are counted per instance since prev (design §6): the delta
 // for an instance seen then, the whole count for an instance created
 // since, nothing for one that disappeared. Terminations are kept only
-// when they happened after prev.
+// when they happened after prev; on the first sweep, only those within
+// the sweep window, the one dated evidence of recent restarts.
 func (c *Collector) CheckSweep(ctx context.Context, svc provider.Service, prev *PreviousSweep) (Report, map[string]int, error) {
 	now := time.Now()
 	if c.Now != nil {
@@ -247,17 +248,20 @@ func (c *Collector) CheckSweep(ctx context.Context, svc provider.Service, prev *
 		return Report{}, nil, fmt.Errorf("instances of %s/%s: %w", svc.Namespace, svc.Name, err)
 	}
 	counts := make(map[string]int, len(instances))
+	since := now.Add(-SweepWindow)
+	if prev != nil {
+		since = prev.At
+	}
 	for i, inst := range instances {
 		counts[inst.Name] = inst.RestartCount
-		if prev == nil {
-			continue
-		}
-		if before, seen := prev.Restarts[inst.Name]; seen {
-			instances[i].RestartCount = max(inst.RestartCount-before, 0)
+		if prev != nil {
+			if before, seen := prev.Restarts[inst.Name]; seen {
+				instances[i].RestartCount = max(inst.RestartCount-before, 0)
+			}
 		}
 		var recent []provider.Termination
 		for _, t := range inst.Terminations {
-			if t.Time.After(prev.At) {
+			if t.Time.After(since) {
 				recent = append(recent, t)
 			}
 		}
