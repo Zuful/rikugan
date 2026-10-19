@@ -1,0 +1,56 @@
+# rikugan serve on Docker Compose: it watches the services of another
+# Compose project (WATCHED_PROJECT), checks each rollout at +5/+15/+30 min
+# and every 4 hours, notifies the team and serves the verdicts API.
+#
+#   docker build --target serve-compose -t rikugan:serve-compose .   # from the repository root
+#   cp deploy/compose/.env.example deploy/compose/.env                # then edit it
+#   docker compose -f deploy/compose/compose.yaml up -d
+#
+# Single instance, always (design §1): container_name is fixed, so
+# `docker compose up --scale rikugan-serve=2` fails, and the journal
+# lives in a named volume. Do not run two Compose projects on the same
+# volume.
+#
+# Security: the daemon reads containers through the Docker socket, and
+# access to the socket is root on the host. It only runs read commands
+# (compose ps, inspect, events); a socket proxy that allows just those
+# (containers and events, read-only) narrows what a compromised daemon
+# could do.
+name: rikugan
+
+services:
+  rikugan-serve:
+    image: rikugan:serve-compose
+    container_name: rikugan-serve
+    restart: unless-stopped
+    environment:
+      ORCHESTRATION_PROVIDER: dockercompose
+      # The project to watch. Named WATCHED_PROJECT on the host so that
+      # COMPOSE_PROJECT_NAME does not also rename this project.
+      COMPOSE_PROJECT_NAME: ${WATCHED_PROJECT:?set WATCHED_PROJECT to the Compose project to watch}
+      PROMETHEUS_URL: ${PROMETHEUS_URL:?set PROMETHEUS_URL}
+      RIKUGAN_STATE_DIR: /var/lib/rikugan
+      # Listening beyond loopback inside the container requires a token.
+      RIKUGAN_SERVE_LISTEN: 0.0.0.0:8080
+      RIKUGAN_SERVE_TOKEN: ${RIKUGAN_SERVE_TOKEN:?set RIKUGAN_SERVE_TOKEN, e.g. openssl rand -hex 24}
+      RIKUGAN_COMPOSE_ROLLOUT_DEADLINE: ${RIKUGAN_COMPOSE_ROLLOUT_DEADLINE:-10m}
+      RIKUGAN_HEALTH_CONFIG: ${RIKUGAN_HEALTH_CONFIG:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      ALERTMANAGER_URL: ${ALERTMANAGER_URL:-}
+      RIKUGAN_LOG_LEVEL: ${RIKUGAN_LOG_LEVEL:-info}
+    volumes:
+      - rikugan-state:/var/lib/rikugan
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      # The host side stays on loopback; widen it on purpose only.
+      - "127.0.0.1:${RIKUGAN_SERVE_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+
+volumes:
+  rikugan-state:

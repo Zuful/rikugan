@@ -69,6 +69,15 @@ jobs:
       - name: Run integration tests
         run: go test -tags integration -run Integration -v -count=1 ./...
 
+      - name: Smoke-test rikugan serve on Docker Compose
+        run: test/compose-smoke.sh
+
+      - name: Verify the systemd unit
+        run: |
+          go build -o rikugan ./cmd/rikugan
+          sudo install -m 0755 rikugan /usr/local/bin/rikugan
+          systemd-analyze verify deploy/systemd/rikugan-serve.service
+
   e2e:
     name: E2E (kind + Prometheus)
     runs-on: ubuntu-latest
