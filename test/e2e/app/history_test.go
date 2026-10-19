@@ -84,8 +84,9 @@ func TestWriteHistory(t *testing.T) {
 	if inf := last["http_request_duration_seconds_bucket{"+sel+`,le="+Inf"}`]; inf != ok+errs {
 		t.Errorf("+Inf bucket %.0f, requests %.0f", inf, ok+errs)
 	}
-	if le10ms := last["http_request_duration_seconds_bucket{"+sel+`,le="0.01"}`]; le10ms < 0.4*(ok+errs) || le10ms > 0.6*(ok+errs) {
-		t.Errorf("%.0f requests under 10 ms, want about half (5 to 15 ms)", le10ms)
+	// Requests take 5 to 14 whole milliseconds: 6 in 10 at 10 ms or less.
+	if le10ms := last["http_request_duration_seconds_bucket{"+sel+`,le="0.01"}`]; le10ms < 0.57*(ok+errs) || le10ms > 0.63*(ok+errs) {
+		t.Errorf("%.0f requests at 10 ms or less out of %.0f, want 60 %%", le10ms, ok+errs)
 	}
 	dbSel := `namespace="lab-shop",service="db",job="shop",instance="history"`
 	dbTotal := last["http_requests_total{"+dbSel+`,code="200"}`] + last["http_requests_total{"+dbSel+`,code="500"}`]

@@ -144,10 +144,10 @@ func readJournal(dir string) ([]record, error) {
 // injection is a regression the lab put in place: a bad revision, or a
 // dependency down, on one service.
 type injection struct {
-	service    string
-	scenario   string
-	severity   string
-	signals    []string
+	service  string
+	scenario string
+	severity string
+	signals  []string
 	// start and end bound the regression: end is the next deploy, the
 	// dependency back, or the end of what it lasts on its own.
 	start, end time.Time
