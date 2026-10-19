@@ -227,3 +227,35 @@ func (n *Notifier) sweepMessage(ctx context.Context, svc provider.Service, rep h
 	}
 	return provider.TeamMessage{Severity: note.Severity, Title: title, Body: strings.TrimSpace(b.String())}
 }
+
+// sweepGroupMessage renders one message for several services that
+// reached the same event in one sweep.
+func (n *Notifier) sweepGroupMessage(ctx context.Context, group []*sweepResult) provider.TeamMessage {
+	note := group[0].note
+	var title string
+	switch note.Event {
+	case sweep.EventIncident:
+		title = fmt.Sprintf("%d services degraded (periodic sweep)", len(group))
+	case sweep.EventPersistentWarning:
+		title = fmt.Sprintf("%d services investigate for several sweeps in a row", len(group))
+	case sweep.EventResolved:
+		title = fmt.Sprintf("%d services resolved, two sweeps ok in a row", len(group))
+	default:
+		title = fmt.Sprintf("%d services investigate (periodic sweep)", len(group))
+	}
+	var b strings.Builder
+	for _, r := range group {
+		fmt.Fprintf(&b, "%s\n", serviceKey(r.svc))
+		if note.Event == sweep.EventResolved {
+			continue
+		}
+		var findings strings.Builder
+		n.writeFindings(ctx, &findings, r.svc, r.rep)
+		for _, line := range strings.Split(strings.TrimSpace(findings.String()), "\n") {
+			if line != "" {
+				fmt.Fprintf(&b, "  %s\n", line)
+			}
+		}
+	}
+	return provider.TeamMessage{Severity: note.Severity, Title: title, Body: strings.TrimSpace(b.String())}
+}

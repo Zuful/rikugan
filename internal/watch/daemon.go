@@ -80,6 +80,8 @@ type Daemon struct {
 	Logger   *slog.Logger
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
+	// Heartbeat, when set, is pinged from the daemon's loop.
+	Heartbeat *Heartbeat
 
 	services  map[string]*serviceState
 	sweeps    map[string]*sweepServiceState
@@ -232,10 +234,21 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 	timer := time.NewTimer(0)
 	defer timer.Stop()
+	// The beats go from the loop itself, so a stuck loop stops them.
+	var beat <-chan time.Time
+	if d.Heartbeat != nil {
+		go d.Heartbeat.ping(ctx)
+		ticker := time.NewTicker(d.Heartbeat.interval())
+		defer ticker.Stop()
+		beat = ticker.C
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-beat:
+			go d.Heartbeat.ping(ctx)
+			continue
 		case r, ok := <-events:
 			if !ok {
 				if ctx.Err() != nil {

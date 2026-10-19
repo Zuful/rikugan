@@ -129,3 +129,28 @@ func TestServeBackendAndComposeDeadline(t *testing.T) {
 		t.Error("1s accepted")
 	}
 }
+
+func TestServeHeartbeat(t *testing.T) {
+	t.Setenv("RIKUGAN_HEARTBEAT_URL", "")
+	if hb, err := serveHeartbeat(nil); hb != nil || err != nil {
+		t.Errorf("unset: %+v, %v", hb, err)
+	}
+	t.Setenv("RIKUGAN_HEARTBEAT_URL", "https://hc-ping.com/s3cret-uuid")
+	t.Setenv("RIKUGAN_HEARTBEAT_INTERVAL", "")
+	if hb, err := serveHeartbeat(nil); err != nil || hb.Interval != 5*time.Minute {
+		t.Errorf("default interval: %+v, %v", hb, err)
+	}
+	t.Setenv("RIKUGAN_HEARTBEAT_INTERVAL", "1m")
+	if hb, err := serveHeartbeat(nil); err != nil || hb.Interval != time.Minute {
+		t.Errorf("1m: %+v, %v", hb, err)
+	}
+	t.Setenv("RIKUGAN_HEARTBEAT_INTERVAL", "1s")
+	if _, err := serveHeartbeat(nil); err == nil {
+		t.Error("an interval under 10s must be refused")
+	}
+	t.Setenv("RIKUGAN_HEARTBEAT_INTERVAL", "")
+	t.Setenv("RIKUGAN_HEARTBEAT_URL", "ftp://s3cret@example.com/x")
+	if _, err := serveHeartbeat(nil); err == nil || strings.Contains(err.Error(), "s3cret") {
+		t.Errorf("bad scheme: %v (the URL must not be echoed)", err)
+	}
+}
