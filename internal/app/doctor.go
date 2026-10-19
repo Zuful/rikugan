@@ -294,7 +294,7 @@ func runDoctor(ctx context.Context, w io.Writer, opts DoctorOptions, deps doctor
 		c.ok("heartbeat", fmt.Sprintf("every %s (not tried: --send-test pings it)", hb.Interval))
 	default:
 		// The URL usually holds a secret: report the status, never the URL.
-		resp, err := deps.http.Get(hb.URL)
+		resp, err := deps.http.Get(hb.URL) // #nosec G107 G704 -- the operator's own heartbeat URL
 		if err != nil {
 			c.fail("heartbeat", "the ping did not go through")
 		} else {
