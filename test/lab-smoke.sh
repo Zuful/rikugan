@@ -27,6 +27,12 @@ cleanup() {
   rm -rf .env state export
 }
 diagnose() {
+  echo "--- prometheus: history series, TSDB status, volume" >&2
+  curl -s "$prom/api/v1/query" --data-urlencode 'query=count(http_requests_total{instance="history"})' >&2 || true
+  echo >&2
+  curl -s "$prom/api/v1/status/tsdb" >&2 || true
+  echo >&2
+  docker run --rm -v rikugan-lab_prometheus-data:/prometheus alpine:3.20 ls -la /prometheus >&2 || true
   echo "--- containers" >&2
   docker ps -a >&2 || true
   for c in rikugan-lab-serve rikugan-lab-loadgen rikugan-lab-prometheus; do

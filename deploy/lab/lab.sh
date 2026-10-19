@@ -291,7 +291,7 @@ cmd_history() { # [days]
     -e NOISE_ERROR_RATE="$(env_value LAB_NOISE_ERROR_RATE)" -e TAIL_SHARE="$(env_value LAB_TAIL_SHARE)" -e TAIL_MS="$(env_value LAB_TAIL_MS)" \
     rikugan-lab-app:local history -days "$days" -end "$end" |
     docker run --rm -i -v rikugan-lab_prometheus-data:/prometheus --entrypoint /bin/promtool prom/prometheus:v3.5.0 \
-      tsdb create-blocks-from openmetrics /dev/stdin /prometheus >/dev/null
+      tsdb create-blocks-from openmetrics /dev/stdin /prometheus
   $LAB start prometheus
   record history "" "$days days" none "" "" "sweeps compare with the same hour a day and a week earlier from now on"
 }
