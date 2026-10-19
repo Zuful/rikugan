@@ -171,9 +171,9 @@ func (n *Notifier) message(ctx context.Context, c Check, d decision) provider.Te
 	var title string
 	switch d.Event {
 	case EventRecovered:
-		title = fmt.Sprintf("%s: recovered, revision %s now %s (%s)", serviceKey(r.Service), r.Sequence, c.Report.Verdict, where)
+		title = fmt.Sprintf("%s: recovered, revision %s now %s (%s)", serviceKey(r.Service), r.Label(), c.Report.Verdict, where)
 	default:
-		title = fmt.Sprintf("%s: revision %s %s (%s)", serviceKey(r.Service), r.Sequence, c.Report.Verdict, where)
+		title = fmt.Sprintf("%s: revision %s %s (%s)", serviceKey(r.Service), r.Label(), c.Report.Verdict, where)
 	}
 
 	var b strings.Builder

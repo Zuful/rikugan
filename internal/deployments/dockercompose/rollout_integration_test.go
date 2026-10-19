@@ -68,7 +68,30 @@ func TestIntegration_ComposeRollouts(t *testing.T) {
 
 	up("1", "true")
 	first := waitState(ctx, t, p, svc, "", provider.RolloutComplete)
-	t.Logf("first revision: %s started %s, completed %s", first.Sequence, first.StartedAt.Format(time.RFC3339Nano), first.CompletedAt.Format(time.RFC3339Nano))
+	t.Logf("first revision: %s started %s, completed %s", first.Label(), first.StartedAt.Format(time.RFC3339Nano), first.CompletedAt.Format(time.RFC3339Nano))
+
+	// Stateless reconstruction later on (check_deploy_health, a catch-up
+	// after downtime): Docker keeps the last 5 probes, so with a 1 s
+	// interval the first passing probe is gone after a few seconds. The
+	// completion time must not move from one call to the next.
+	time.Sleep(8 * time.Second)
+	later, err := p.LastRollout(ctx, svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(4 * time.Second)
+	again, err := p.LastRollout(ctx, svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("completed %s, then %s (estimated %v), then %s (estimated %v)", first.CompletedAt.Format(time.RFC3339Nano),
+		later.CompletedAt.Format(time.RFC3339Nano), later.CompletedAtEstimated, again.CompletedAt.Format(time.RFC3339Nano), again.CompletedAtEstimated)
+	if !later.CompletedAt.Equal(again.CompletedAt) || !later.CompletedAtEstimated {
+		t.Errorf("completion time drifted or not marked estimated: %s then %s", later.CompletedAt, again.CompletedAt)
+	}
+	if later.CompletedAt.After(first.CompletedAt) {
+		t.Errorf("the estimate %s must be a lower bound of the observed %s", later.CompletedAt, first.CompletedAt)
+	}
 
 	events, err := p.WatchRollouts(ctx)
 	if err != nil {
@@ -78,7 +101,7 @@ func TestIntegration_ComposeRollouts(t *testing.T) {
 		t.Helper()
 		select {
 		case r := <-events:
-			t.Logf("reported: %s %s", r.Sequence, r.State)
+			t.Logf("reported: %s %s", r.Label(), r.State)
 			return r
 		case <-ctx.Done():
 			t.Fatalf("%s: nothing reported", what)
