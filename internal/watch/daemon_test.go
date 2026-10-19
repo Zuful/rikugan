@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -362,6 +363,27 @@ func TestBeforeEndFollowsTheChainOfCloseRollouts(t *testing.T) {
 	}
 	if got := h.d.beforeEnd(h.d.services["prod/api"].rollouts["1"]); !got.IsZero() {
 		t.Errorf("revision 1 follows nothing close: %s", got)
+	}
+}
+
+func TestBeforeEndTracesLongChainsPastStaleAfter(t *testing.T) {
+	for _, every := range []time.Duration{20 * time.Minute, 5 * time.Minute} {
+		h := newHarness(t)
+		start := t0.Add(-4 * time.Hour)
+		var last string
+		for i := 0; !start.Add(time.Duration(i) * every).After(t0); i++ {
+			at := start.Add(time.Duration(i) * every)
+			last = strconv.Itoa(i + 1)
+			h.at(at.Add(time.Minute).Sub(t0)).handle(provider.Rollout{Service: api, Sequence: last,
+				State: provider.RolloutComplete, StartedAt: at, CompletedAt: at.Add(time.Minute)})
+		}
+		rs := h.d.services["prod/api"].rollouts[last]
+		got := h.d.beforeEnd(rs)
+		// Every 5 minutes is 49 rollouts, past keepRollouts: the chain
+		// must still reach back beyond stale_after.
+		if gap := rs.rollout.StartedAt.Sub(got); gap <= health.DefaultConfig().StaleAfter {
+			t.Errorf("every %s: before window ends %s before the last rollout, want past stale_after", every, gap)
+		}
 	}
 }
 

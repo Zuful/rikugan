@@ -33,8 +33,9 @@ const lateAfter = time.Minute
 // tried again.
 const retryAfter = time.Minute
 
-// keepRollouts bounds the rollouts remembered per service: enough to
-// chain back to the last stable period and to deduplicate events.
+// keepRollouts bounds the rollouts remembered per service, enough to
+// deduplicate events. Rollouts recent enough to belong to a chain that
+// beforeEnd must trace are kept beyond it (prune).
 const keepRollouts = 20
 
 // Checker evaluates one rollout. *health.Collector implements it.
@@ -324,7 +325,7 @@ func (d *Daemon) rolloutState(r provider.Rollout) *rolloutState {
 			skipped:  map[time.Duration]bool{},
 		}
 		st.rollouts[r.Sequence] = rs
-		st.prune()
+		st.prune(d.config(r.Service))
 	}
 	return rs
 }
@@ -616,13 +617,27 @@ func (st *serviceState) sorted() []*rolloutState {
 	return out
 }
 
-// prune forgets the oldest rollouts past keepRollouts.
-func (st *serviceState) prune() {
+// prune forgets the oldest rollouts past keepRollouts, except those
+// started within stale_after plus two before windows of the newest: a
+// chain of close rollouts must stay traceable past stale_after, or
+// beforeEnd would stop at the oldest one remembered and take a window
+// inside the chain for a stable period.
+func (st *serviceState) prune(cfg health.Config) {
 	if len(st.rollouts) <= keepRollouts {
 		return
 	}
 	all := st.sorted()
+	var latest time.Time
+	for _, rs := range all {
+		if rs.rollout.StartedAt.After(latest) {
+			latest = rs.rollout.StartedAt
+		}
+	}
+	horizon := latest.Add(-cfg.StaleAfter - 2*cfg.BeforeWindow)
 	for _, rs := range all[:len(all)-keepRollouts] {
+		if s := rs.rollout.StartedAt; !s.IsZero() && s.After(horizon) {
+			continue
+		}
 		delete(st.rollouts, rs.rollout.Sequence)
 	}
 }
