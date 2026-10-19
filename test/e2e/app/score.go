@@ -34,7 +34,7 @@ func score() {
 		log.Fatal(err)
 	}
 	s := scoreRun(actions, records)
-	report, err := os.Create(filepath.Join(dir, "report.md")) // #nosec G304 -- the operator's export
+	report, err := os.Create(filepath.Join(dir, "report.md")) // #nosec G304 G703 -- the operator's own export directory
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func score() {
 	if err := report.Close(); err != nil {
 		log.Fatal(err)
 	}
-	notes, err := os.Create(filepath.Join(dir, "notifications.csv")) // #nosec G304 -- the operator's export
+	notes, err := os.Create(filepath.Join(dir, "notifications.csv")) // #nosec G304 G703 -- the operator's own export directory
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -91,7 +91,7 @@ type signal struct {
 }
 
 func readActions(path string) ([]action, error) {
-	f, err := os.Open(path) // #nosec G304 -- the operator's export
+	f, err := os.Open(path) // #nosec G304 G703 -- the operator's own export directory
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +120,7 @@ func readJournal(dir string) ([]record, error) {
 	}
 	var out []record
 	for _, path := range files {
-		f, err := os.Open(path) // #nosec G304 -- the operator's export
+		f, err := os.Open(path) // #nosec G304 G703 -- the operator's own export directory
 		if err != nil {
 			return nil, err
 		}
