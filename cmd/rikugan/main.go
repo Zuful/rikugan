@@ -1,5 +1,8 @@
 // Command rikugan starts the Rikugan MCP server over STDIO transport.
-// "rikugan serve" starts the proactive mode's daemon instead.
+// "rikugan serve" starts the proactive mode's daemon instead, and
+// "rikugan doctor" checks its configuration end to end
+// ("rikugan doctor --send-test" also sends a test message on every
+// channel and pings the heartbeat).
 //
 // Logs are written as structured JSON to stderr (the STDIO MCP transport
 // uses stdin/stdout for the JSON-RPC protocol). Under serve, stdout
@@ -13,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/mark3labs/mcp-go/server"
 
@@ -27,6 +31,9 @@ func main() {
 	logger := logging.New("RIKUGAN_LOG_LEVEL")
 	slog.SetDefault(logger)
 
+	if len(os.Args) > 1 && os.Args[1] == "doctor" {
+		os.Exit(doctor(logger))
+	}
 	if len(os.Args) > 1 && os.Args[1] == "serve" {
 		if err := serve(logger); err != nil {
 			logger.Error("rikugan serve exited with error", slog.String("error", err.Error()))
@@ -86,4 +93,25 @@ func serve(logger *slog.Logger) error {
 	verdicts := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	logger.Info("rikugan serve", slog.String("version", version))
 	return app.Serve(ctx, logger, verdicts)
+}
+
+// doctor checks rikugan serve's configuration and returns the exit
+// code: 1 when a check failed, 2 on a bad argument.
+func doctor(logger *slog.Logger) int {
+	opts := app.DoctorOptions{Logger: logger}
+	for _, arg := range os.Args[2:] {
+		switch arg {
+		case "--send-test":
+			opts.SendTest = true
+		default:
+			fmt.Fprintln(os.Stderr, "usage: rikugan doctor [--send-test]")
+			return 2
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if !app.Doctor(ctx, os.Stdout, opts) {
+		return 1
+	}
+	return 0
 }
