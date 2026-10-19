@@ -34,6 +34,10 @@ type Config struct {
 	LatencyInvestigateAbs time.Duration
 	LatencyDegradedPct    float64
 	LatencyDegradedAbs    time.Duration
+	// LatencyMethod is how a window's latency is figured: LatencyWindow
+	// (default), the p95 of all the window's requests from the histogram
+	// buckets, or LatencyMedian, the median of the per-minute p95.
+	LatencyMethod string
 	// LatencyDegradedFromCheckpoint caps latency at "investigate" before
 	// this checkpoint: a slow warm-up puts the median of a 5-minute window
 	// on its spike (design v3.5).
@@ -77,6 +81,12 @@ type Config struct {
 }
 
 // DefaultConfig returns the thresholds of the design (issue #4, v3.5).
+// Latency methods (Config.LatencyMethod).
+const (
+	LatencyWindow = "window"
+	LatencyMedian = "median"
+)
+
 func DefaultConfig() Config {
 	return Config{
 		BeforeWindow: 30 * time.Minute,
@@ -89,6 +99,7 @@ func DefaultConfig() Config {
 		LatencyDegradedPct:    1.00,
 		LatencyDegradedAbs:    200 * time.Millisecond,
 
+		LatencyMethod:                 LatencyWindow,
 		LatencyDegradedFromCheckpoint: 15 * time.Minute,
 
 		ErrorRatio:             2,

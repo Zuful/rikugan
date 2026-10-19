@@ -49,6 +49,8 @@ type Thresholds struct {
 	LatencyDegradedAbs    *Duration `json:"latency_degraded_abs"`
 
 	LatencyDegradedFromCheckpoint *Duration `json:"latency_degraded_from_checkpoint"`
+	// LatencyMethod is "window" or "median".
+	LatencyMethod *string `json:"latency_method"`
 
 	ErrorRatio             *float64 `json:"error_ratio"`
 	ErrorInvestigateRate   *float64 `json:"error_investigate_rate"`
@@ -106,6 +108,15 @@ func LoadSettings(path string) (Settings, error) {
 	if err := yaml.UnmarshalStrict(raw, &s); err != nil {
 		return Settings{}, fmt.Errorf("parse health settings %s: %w", path, err)
 	}
+	overrides := map[string]Override{"defaults": s.Defaults}
+	for name, o := range s.Services {
+		overrides[name] = o
+	}
+	for name, o := range overrides {
+		if m := o.Thresholds.LatencyMethod; m != nil && *m != LatencyWindow && *m != LatencyMedian {
+			return Settings{}, fmt.Errorf("health settings %s, %s: latency_method %q, want %q or %q", path, name, *m, LatencyWindow, LatencyMedian)
+		}
+	}
 	return s, nil
 }
 
@@ -130,6 +141,9 @@ func (o Override) apply(cfg *Config, tpl *Templates) {
 	setNum(&cfg.LatencyDegradedPct, t.LatencyDegradedPct)
 	setDur(&cfg.LatencyDegradedAbs, t.LatencyDegradedAbs)
 	setDur(&cfg.LatencyDegradedFromCheckpoint, t.LatencyDegradedFromCheckpoint)
+	if t.LatencyMethod != nil {
+		cfg.LatencyMethod = *t.LatencyMethod
+	}
 	setNum(&cfg.ErrorRatio, t.ErrorRatio)
 	setNum(&cfg.ErrorInvestigateRate, t.ErrorInvestigateRate)
 	setNum(&cfg.ErrorInvestigateMinErr, t.ErrorInvestigateMinErr)
@@ -154,6 +168,7 @@ func (o Override) apply(cfg *Config, tpl *Templates) {
 	setStr(&tpl.RequestRate, o.Templates.RequestRate)
 	setStr(&tpl.ErrorRate, o.Templates.ErrorRate)
 	setStr(&tpl.LatencyP95, o.Templates.LatencyP95)
+	setStr(&tpl.LatencyWindowP95, o.Templates.LatencyWindowP95)
 	setStr(&tpl.CPU, o.Templates.CPU)
 	setStr(&tpl.Memory, o.Templates.Memory)
 }

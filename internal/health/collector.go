@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
 	"text/template"
@@ -14,7 +15,8 @@ import (
 )
 
 // Templates are the metric queries behind each signal, as Go templates
-// over {{.Namespace}}, {{.Service}} and {{.Revision}}. GetMetric takes
+// over {{.Namespace}}, {{.Service}} and {{.Revision}}, and {{.Window}}
+// for LatencyWindowP95. GetMetric takes
 // a raw query, so templates are written in the dialect of the metrics
 // backend — PromQL for the Prometheus provider. Each query must return
 // a single aggregated series. An empty template disables its signal.
@@ -22,8 +24,13 @@ type Templates struct {
 	RequestRate string `json:"request_rate"`
 	ErrorRate   string `json:"error_rate"`
 	LatencyP95  string `json:"latency_p95"`
-	CPU         string `json:"cpu"`
-	Memory      string `json:"memory"`
+	// LatencyWindowP95 is the p95 of all the requests of a window ending
+	// at the query time, {{.Window}} long (a PromQL duration). It is
+	// evaluated once per window; LatencyP95 is the per-minute series the
+	// median method reads.
+	LatencyWindowP95 string `json:"latency_window_p95"`
+	CPU              string `json:"cpu"`
+	Memory           string `json:"memory"`
 }
 
 // DefaultTemplates follow common conventions: the Prometheus client
@@ -38,10 +45,11 @@ func DefaultTemplates() Templates {
 		RequestRate: `sum(rate(http_requests_total{` + sel + `}[1m]))`,
 		// "or vector(0)": without any 5xx yet, the 5xx series does not
 		// exist and the sum is empty; zero errors is what that means.
-		ErrorRate:  `sum(rate(http_requests_total{` + sel + `,code=~"5.."}[1m])) or vector(0)`,
-		LatencyP95: `histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{` + sel + `}[1m])))`,
-		CPU:        `avg(sum by (pod) (rate(container_cpu_usage_seconds_total{` + pods + `}[1m])))`,
-		Memory:     `avg(sum by (pod) (container_memory_working_set_bytes{` + pods + `}))`,
+		ErrorRate:        `sum(rate(http_requests_total{` + sel + `,code=~"5.."}[1m])) or vector(0)`,
+		LatencyP95:       `histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{` + sel + `}[1m])))`,
+		LatencyWindowP95: `histogram_quantile(0.95, sum by (le) (increase(http_request_duration_seconds_bucket{` + sel + `}[{{.Window}}])))`,
+		CPU:              `avg(sum by (pod) (rate(container_cpu_usage_seconds_total{` + pods + `}[1m])))`,
+		Memory:           `avg(sum by (pod) (container_memory_working_set_bytes{` + pods + `}))`,
 	}
 }
 
@@ -133,6 +141,12 @@ func (c *Collector) CheckRollout(ctx context.Context, rollout provider.Rollout, 
 					in.Seasonal = &seasonal
 				}
 			}
+			if metricsErr == nil && cfg.LatencyMethod != LatencyMedian && tpl.LatencyWindowP95 != "" {
+				lw := &WindowP95{}
+				lw.Before, lw.HasBefore = c.windowP95(ctx, tpl, vars, beforeEnd, cfg.BeforeWindow, 0, &notes)
+				lw.After, lw.HasAfter = c.windowP95(ctx, tpl, vars, to, cp, 0, &notes)
+				in.LatencyWindow = lw
+			}
 		}
 	}
 
@@ -149,12 +163,43 @@ func (c *Collector) orchestrationError(err error) error {
 	return &BackendError{Kind: BackendOrchestration, Name: c.Orchestration.Name(), Err: err}
 }
 
-type templateVars struct{ Namespace, Service, Revision string }
+type templateVars struct{ Namespace, Service, Revision, Window string }
 
 // safeName matches Kubernetes names and Compose service/project names.
 // Template variables are interpolated into queries, so anything else is
 // refused rather than escaped.
 var safeName = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9_.-]*[a-zA-Z0-9])?$`)
+
+// windowP95 evaluates LatencyWindowP95 for the window of length w
+// ending at end (shifted back by offset). A query error is a note; no
+// value (no requests in the window, NaN) is not evaluated.
+func (c *Collector) windowP95(ctx context.Context, tpl Templates, vars templateVars, end time.Time, w, offset time.Duration, notes *[]string) (float64, bool) {
+	vars.Window = fmt.Sprintf("%ds", int(w.Seconds()))
+	query, err := render(tpl.LatencyWindowP95, vars)
+	if err != nil {
+		*notes = append(*notes, fmt.Sprintf("latency window p95 query: %v", err))
+		return 0, false
+	}
+	at := end.Add(-offset)
+	samples, err := c.Metrics.GetMetric(ctx, query, at, at, seriesStep)
+	if err != nil {
+		*notes = append(*notes, fmt.Sprintf("latency window p95 query failed: %v", err))
+		return 0, false
+	}
+	series, n := singleSeries(samples, 0)
+	if n > 1 {
+		*notes = append(*notes, fmt.Sprintf("latency window p95 query returned %d series, expected one aggregated series; signal skipped", n))
+		return 0, false
+	}
+	if len(series) == 0 {
+		return 0, false
+	}
+	v := series[len(series)-1].Value
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0, false
+	}
+	return v, true
+}
 
 // fetch runs every non-empty template over [from, to], shifted back by
 // offset. Returned samples are shifted forward by the same offset so
@@ -314,9 +359,15 @@ func (c *Collector) CheckSweep(ctx context.Context, svc provider.Service, prev *
 		}
 	}
 
+	var lw *WindowP95
+	if baseline != nil && cfg.LatencyMethod != LatencyMedian && tpl.LatencyWindowP95 != "" {
+		lw = &WindowP95{}
+		lw.Before, lw.HasBefore = c.windowP95(ctx, tpl, vars, now, SweepWindow, age, &notes)
+		lw.After, lw.HasAfter = c.windowP95(ctx, tpl, vars, now, SweepWindow, 0, &notes)
+	}
 	r := EvaluateSweep(cfg, SweepInputs{
 		Now: now, Current: current, Baseline: baseline, BaselineAge: age,
-		Instances: instances, FirstSweep: prev == nil,
+		Instances: instances, FirstSweep: prev == nil, LatencyWindow: lw,
 	})
 	r.Rollout = rollout
 	if metricsErr != nil {

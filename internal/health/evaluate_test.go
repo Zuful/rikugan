@@ -807,3 +807,42 @@ func TestEvaluate_ChainedPastStaleAfter(t *testing.T) {
 		t.Errorf("chained for 1h50: verdict %s, want ok\n%s", r.Verdict, dump(r))
 	}
 }
+
+func TestEvaluate_LatencyMethods(t *testing.T) {
+	// A 3-minute warm-up spike at 400 ms in a 15-minute after window,
+	// 120 ms otherwise: the per-minute median ignores it; the p95 of
+	// the window's requests, which the backend computes, carries it.
+	s := healthy()
+	s.LatencyP95 = profile(func(m float64) float64 {
+		if m >= 0 && m < 3 {
+			return 0.400
+		}
+		return 0.120
+	})
+	in := inputs(s, 15)
+	in.LatencyWindow = &WindowP95{Before: 0.120, After: 0.390, HasBefore: true, HasAfter: true}
+
+	r := Evaluate(DefaultConfig(), in)
+	if got, _ := r.Signal(SignalLatency); got.Status != StatusDegraded || !strings.HasPrefix(got.Reason, "p95 over the window 120ms → 390ms") {
+		t.Errorf("window method: %+v", got)
+	}
+
+	cfg := DefaultConfig()
+	cfg.LatencyMethod = LatencyMedian
+	r = Evaluate(cfg, in)
+	if got, _ := r.Signal(SignalLatency); got.Status != StatusOK || !strings.HasPrefix(got.Reason, "median p95 over the window 120ms → 120ms") {
+		t.Errorf("median method: %+v", got)
+	}
+
+	// No requests in a window: the backend has no p95 for it.
+	in.LatencyWindow = &WindowP95{Before: 0.120, HasBefore: true}
+	if got, _ := Evaluate(DefaultConfig(), in).Signal(SignalLatency); got.Status != StatusNotEvaluated {
+		t.Errorf("window without a value: %+v", got)
+	}
+
+	// No window template (custom templates): the median, named as such.
+	in.LatencyWindow = nil
+	if got, _ := Evaluate(DefaultConfig(), in).Signal(SignalLatency); !strings.HasPrefix(got.Reason, "median p95") {
+		t.Errorf("without window values: %+v", got)
+	}
+}
