@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -120,11 +121,15 @@ func Serve(ctx context.Context, logger, verdicts *slog.Logger) error {
 		Verdicts: verdicts,
 		Logger:   logger,
 	}
+	if daemon.Heartbeat, err = serveHeartbeat(logger); err != nil {
+		return err
+	}
 	logger.Info("rikugan serve starting",
 		slog.String("state_dir", stateDir),
 		slog.String("namespaces", strings.Join(namespaces, ",")),
 		slog.String("listen", listen),
 		slog.Bool("token", token != ""),
+		slog.Bool("heartbeat", daemon.Heartbeat != nil),
 	)
 	return runWithAPI(ctx, daemon, &http.Server{
 		Addr:              listen,
@@ -237,6 +242,30 @@ func splitList(raw string) []string {
 		}
 	}
 	return out
+}
+
+// serveHeartbeat reads RIKUGAN_HEARTBEAT_URL, a dead man's switch the
+// daemon pings every RIKUGAN_HEARTBEAT_INTERVAL (default 5m) while it
+// runs; nil when unset.
+func serveHeartbeat(logger *slog.Logger) (*watch.Heartbeat, error) {
+	raw := os.Getenv("RIKUGAN_HEARTBEAT_URL")
+	if raw == "" {
+		return nil, nil
+	}
+	if u, err := url.Parse(raw); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		// The URL usually holds a secret: never echo it.
+		return nil, errors.New("RIKUGAN_HEARTBEAT_URL: want an http(s) URL")
+	}
+	hb := &watch.Heartbeat{URL: raw, Interval: watch.DefaultHeartbeatInterval, Logger: logger,
+		Client: &http.Client{Timeout: 10 * time.Second}}
+	if v := os.Getenv("RIKUGAN_HEARTBEAT_INTERVAL"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d < 10*time.Second {
+			return nil, fmt.Errorf("RIKUGAN_HEARTBEAT_INTERVAL: want a duration of at least 10s, such as 5m; got %q", v)
+		}
+		hb.Interval = d
+	}
+	return hb, nil
 }
 
 // serveNotifier builds the notification side: every configured channel

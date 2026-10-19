@@ -118,6 +118,7 @@ func (d *Daemon) runSweep(ctx context.Context) error {
 	if d.sweeps == nil {
 		d.sweeps = map[string]*sweepServiceState{}
 	}
+	var swept []provider.Service
 	for _, ns := range d.Sweep.Namespaces {
 		services, err := d.Sweep.Services.ListServices(ctx, ns)
 		if err != nil {
@@ -135,12 +136,10 @@ func (d *Daemon) runSweep(ctx context.Context) error {
 				d.logger().Debug("sweep: skipped", slog.String("service", serviceKey(svc)), slog.String("reason", why))
 				continue
 			}
-			if err := d.sweepService(ctx, svc); err != nil {
-				return err
-			}
+			swept = append(swept, svc)
 		}
 	}
-	return nil
+	return d.sweepServices(ctx, swept)
 }
 
 // coveredByRollout reports whether the service's rollout checks still
@@ -166,16 +165,17 @@ func (d *Daemon) coveredByRollout(ctx context.Context, svc provider.Service, now
 // retrySweeps runs again the sweeps whose message no channel took. It
 // returns when the next retry is due, zero when none is.
 func (d *Daemon) retrySweeps(ctx context.Context) (time.Time, error) {
+	var due []provider.Service
+	for _, st := range d.sweeps {
+		if !st.retryAt.IsZero() && !st.retryAt.After(d.now()) {
+			due = append(due, st.svc)
+		}
+	}
+	if err := d.sweepServices(ctx, due); err != nil {
+		return time.Time{}, err
+	}
 	var next time.Time
 	for _, st := range d.sweeps {
-		if st.retryAt.IsZero() {
-			continue
-		}
-		if !st.retryAt.After(d.now()) {
-			if err := d.sweepService(ctx, st.svc); err != nil {
-				return time.Time{}, err
-			}
-		}
 		if !st.retryAt.IsZero() && (next.IsZero() || st.retryAt.Before(next)) {
 			next = st.retryAt
 		}
@@ -183,11 +183,88 @@ func (d *Daemon) retrySweeps(ctx context.Context) (time.Time, error) {
 	return next, nil
 }
 
-// sweepService checks one service, steps its state machine, notifies
-// what the machine says, and records the result. An orchestration error
-// skips the service until the next sweep; with the metrics backend
-// failing, the instance signals are still evaluated.
-func (d *Daemon) sweepService(ctx context.Context, svc provider.Service) error {
+// sweepResult is one service's sweep, evaluated, not yet recorded.
+type sweepResult struct {
+	svc  provider.Service
+	st   *sweepServiceState
+	rep  health.Report
+	rec  sweepRecord
+	next sweep.State
+	note *sweep.Notification
+}
+
+// sweepServices checks each service, steps its state machine, notifies
+// what the machines say, and records the results. Services that reach
+// the same event in one sweep share one message: a node or a shared
+// dependency going down must not send fifteen criticals at once, and
+// channels limit how fast they take messages anyway.
+func (d *Daemon) sweepServices(ctx context.Context, services []provider.Service) error {
+	var results []*sweepResult
+	for _, svc := range services {
+		if r := d.evaluateSweep(ctx, svc); r != nil {
+			results = append(results, r)
+		}
+	}
+
+	// As for rollouts: send first, so a crash repeats rather than loses.
+	undelivered := map[*sweepResult]bool{}
+	if d.Notifier != nil {
+		var events []sweep.Event
+		byEvent := map[sweep.Event][]*sweepResult{}
+		for _, r := range results {
+			if r.note == nil {
+				continue
+			}
+			if byEvent[r.note.Event] == nil {
+				events = append(events, r.note.Event)
+			}
+			byEvent[r.note.Event] = append(byEvent[r.note.Event], r)
+		}
+		for _, ev := range events {
+			group := byEvent[ev]
+			var msg provider.TeamMessage
+			if len(group) == 1 {
+				msg = d.Notifier.sweepMessage(ctx, group[0].svc, group[0].rep, *group[0].note)
+			} else {
+				msg = d.Notifier.sweepGroupMessage(ctx, group)
+			}
+			delivered := d.Notifier.Send(ctx, msg)
+			for _, r := range group {
+				r.rec.Notified = &sweepNotifRecord{Event: r.note.Event, Severity: string(r.note.Severity), Title: msg.Title, Delivered: delivered}
+				if len(delivered) == 0 && len(d.Notifier.Channels) > 0 {
+					undelivered[r] = true
+					r.st.retryAt = d.now().Add(retryAfter)
+				}
+			}
+			if len(delivered) == 0 && len(d.Notifier.Channels) > 0 {
+				d.logger().Error("sweep: notification not delivered on any channel, retrying",
+					slog.String("title", msg.Title), slog.Int("services", len(group)))
+			}
+		}
+	}
+
+	for _, r := range results {
+		if undelivered[r] {
+			continue
+		}
+		if err := d.append(KindSweep, r.svc, r.rec); err != nil {
+			return err
+		}
+		r.st.state = r.next
+		r.st.prev = &health.PreviousSweep{At: d.now(), Restarts: r.rec.Restarts}
+		if d.Verdicts != nil {
+			d.Verdicts.Info("sweep", slog.String("service", serviceKey(r.svc)), slog.String("verdict", string(r.rep.Verdict)),
+				slog.String("phase", string(r.next.Phase)))
+		}
+	}
+	return nil
+}
+
+// evaluateSweep checks one service and steps its state machine, nil
+// when it cannot be evaluated. An orchestration error skips the service
+// until the next sweep; with the metrics backend failing, the instance
+// signals are still evaluated.
+func (d *Daemon) evaluateSweep(ctx context.Context, svc provider.Service) *sweepResult {
 	key := serviceKey(svc)
 	st := d.sweeps[key]
 	if st == nil {
@@ -212,32 +289,10 @@ func (d *Daemon) sweepService(ctx context.Context, svc provider.Service) error {
 		d.backendOK(ctx, health.BackendMetrics)
 	}
 	next, note := sweep.Step(st.state, rep.Verdict, d.Sweep.State)
-
 	rec := sweepRecord{Revision: rep.Rollout.Label(), Outcome: string(rep.Outcome), Verdict: string(rep.Verdict),
 		Notes: rep.Notes, State: next, Restarts: counts}
 	for _, s := range rep.Signals {
 		rec.Signals = append(rec.Signals, Signal{Name: s.Name, Status: string(s.Status), Reason: s.Reason})
 	}
-	// As for rollouts: send first, so a crash repeats rather than loses.
-	if note != nil && d.Notifier != nil {
-		msg := d.Notifier.sweepMessage(ctx, svc, rep, *note)
-		rec.Notified = &sweepNotifRecord{Event: note.Event, Severity: string(note.Severity), Title: msg.Title,
-			Delivered: d.Notifier.Send(ctx, msg)}
-		if len(rec.Notified.Delivered) == 0 && len(d.Notifier.Channels) > 0 {
-			st.retryAt = d.now().Add(retryAfter)
-			d.logger().Error("sweep: notification not delivered on any channel, retrying",
-				slog.String("service", key), slog.String("title", msg.Title))
-			return nil
-		}
-	}
-	if err := d.append(KindSweep, svc, rec); err != nil {
-		return err
-	}
-	st.state = next
-	st.prev = &health.PreviousSweep{At: d.now(), Restarts: counts}
-	if d.Verdicts != nil {
-		d.Verdicts.Info("sweep", slog.String("service", key), slog.String("verdict", string(rep.Verdict)),
-			slog.String("phase", string(next.Phase)))
-	}
-	return nil
+	return &sweepResult{svc: svc, st: st, rep: rep, rec: rec, next: next, note: note}
 }

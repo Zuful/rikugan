@@ -49,7 +49,10 @@ serve:
   # Notification channels and other settings, as environment variables
   # (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, SLACK_WEBHOOK_URL,
   # RIKUGAN_SWEEP_INTERVAL, ALERTMANAGER_URL…). Put credentials in a
-  # Secret and reference it through envFrom.
+  # Secret and reference it through envFrom. Set RIKUGAN_HEARTBEAT_URL
+  # (a dead man's switch, pinged every RIKUGAN_HEARTBEAT_INTERVAL, 5m)
+  # to be told when the daemon stops: the readiness probe only tells
+  # Kubernetes, and a stopped daemon is otherwise silent.
   env: []
   envFrom: []
   # Per-service thresholds and query templates, mounted as the file named

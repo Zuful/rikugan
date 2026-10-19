@@ -94,6 +94,9 @@ type harness struct {
 	checker *fakeChecker
 	checks  []Check
 	d       *Daemon
+	// maxSize, when set, is the journal's rotation size from the next
+	// restart on.
+	maxSize int64
 }
 
 func newHarness(t *testing.T) *harness {
@@ -107,7 +110,7 @@ func (h *harness) restart() {
 	if h.d != nil {
 		_ = h.d.Journal.Close()
 	}
-	j, err := journal.Open(h.dir, journal.Options{Now: h.clock.Now})
+	j, err := journal.Open(h.dir, journal.Options{Now: h.clock.Now, MaxSize: h.maxSize})
 	if err != nil {
 		h.t.Fatal(err)
 	}
