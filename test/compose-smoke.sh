@@ -77,7 +77,7 @@ if doctor=$(docker exec rikugan-serve rikugan doctor); then
   exit 1
 fi
 grep -q '^✗ metrics backend' <<<"$doctor" || { echo "doctor: no metrics failure:" >&2; echo "$doctor" >&2; exit 1; }
-grep -Eq "^✓ orchestration +dockercompose, $WATCHED_PROJECT: 1 services" <<<"$doctor" || { echo "doctor: watched project not seen:" >&2; echo "$doctor" >&2; exit 1; }
+grep -Eq "^✓ orchestration +dockercompose, $WATCHED_PROJECT: 1 service" <<<"$doctor" || { echo "doctor: watched project not seen:" >&2; echo "$doctor" >&2; exit 1; }
 grep -Eq "^✓ $WATCHED_PROJECT/web +revision [0-9a-f]{12}, complete" <<<"$doctor" || { echo "doctor: web's rollout not read:" >&2; echo "$doctor" >&2; exit 1; }
 
 if docker compose -f "$file" up -d --scale rikugan-serve=2 >/dev/null 2>&1; then

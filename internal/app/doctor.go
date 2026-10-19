@@ -197,7 +197,11 @@ func runDoctor(ctx context.Context, w io.Writer, opts DoctorOptions, deps doctor
 			continue
 		}
 		services = append(services, list...)
-		c.ok("orchestration", fmt.Sprintf("%s, %s: %d services", backend, ns, len(list)))
+		noun := "services"
+		if len(list) == 1 {
+			noun = "service"
+		}
+		c.ok("orchestration", fmt.Sprintf("%s, %s: %d %s", backend, ns, len(list), noun))
 	}
 
 	// Rights on Kubernetes, as the Helm chart's Role grants them.
