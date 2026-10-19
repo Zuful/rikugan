@@ -80,13 +80,13 @@ type Config struct {
 	LeakMaxTrafficGrowth float64
 }
 
-// DefaultConfig returns the thresholds of the design (issue #4, v3.5).
 // Latency methods (Config.LatencyMethod).
 const (
 	LatencyWindow = "window"
 	LatencyMedian = "median"
 )
 
+// DefaultConfig returns the thresholds of the design (issue #4, v3.5).
 func DefaultConfig() Config {
 	return Config{
 		BeforeWindow: 30 * time.Minute,
