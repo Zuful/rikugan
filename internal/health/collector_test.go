@@ -2,6 +2,7 @@ package health
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,7 +29,13 @@ type fakeMetrics struct {
 	calls  []metricCall
 	// notBefore, when set, is the store's retention: nothing older.
 	notBefore time.Time
+	// fail, when set, fails every query containing failMatch (every
+	// query when failMatch is empty).
+	fail      error
+	failMatch string
 }
+
+func (f *fakeMetrics) Name() string { return "prometheus" }
 
 type metricValue struct {
 	match string
@@ -37,6 +44,9 @@ type metricValue struct {
 
 func (f *fakeMetrics) GetMetric(_ context.Context, query string, start, end time.Time, step time.Duration) ([]provider.MetricSample, error) {
 	f.calls = append(f.calls, metricCall{query, start, end})
+	if f.fail != nil && strings.Contains(query, f.failMatch) {
+		return nil, f.fail
+	}
 	if !f.notBefore.IsZero() && end.Before(f.notBefore) {
 		return nil, nil
 	}
@@ -64,11 +74,14 @@ type fakeOrch struct {
 	provider.OrchestrationProvider
 	instances []provider.Instance
 	revision  string
+	err       error
 }
+
+func (f *fakeOrch) Name() string { return "kubernetes" }
 
 func (f *fakeOrch) GetRevisionInstances(_ context.Context, _ provider.Service, revision string) ([]provider.Instance, error) {
 	f.revision = revision
-	return f.instances, nil
+	return f.instances, f.err
 }
 
 type fakeDeployments struct {
@@ -265,5 +278,81 @@ func TestCollector_CheckRolloutWithOptions(t *testing.T) {
 	wantFrom, wantTo := beforeEnd.Add(-30*time.Minute), minute(15)
 	if call := m.calls[0]; !call.start.Equal(wantFrom) || !call.end.Equal(wantTo) {
 		t.Errorf("query over [%s, %s], want [%s, %s]", call.start, call.end, wantFrom, wantTo)
+	}
+}
+
+func TestCollector_MetricsBackendFailing(t *testing.T) {
+	down := errors.New("dial tcp 10.0.0.9:9090: connection refused")
+	m := busy(0.450)
+	m.fail = down
+	c, orch := newCollector(m, rollout(), minute(15).Add(10*time.Second))
+
+	// Healthy instances: nothing sound to say.
+	r, err := c.CheckRollout(context.Background(), rollout(), CheckOptions{Checkpoint: 15 * time.Minute})
+	var be *BackendError
+	if !errors.As(err, &be) || be.Kind != BackendMetrics || be.Name != "prometheus" || !errors.Is(err, down) {
+		t.Fatalf("error %v, want a metrics BackendError", err)
+	}
+	if r.Verdict != StatusInsufficientData {
+		t.Errorf("verdict %s, want insufficient data\n%s", r.Verdict, dump(r))
+	}
+	for _, name := range []string{SignalLatency, SignalErrorRate, SignalSaturation, SignalTraffic} {
+		if s, _ := r.Signal(name); s.Status != StatusNotEvaluated || !strings.Contains(s.Reason, "metrics backend prometheus failing") {
+			t.Errorf("%s: %+v", name, s)
+		}
+	}
+	notes := strings.Join(r.Notes, "\n")
+	if !strings.Contains(notes, "metrics not evaluated") || strings.Contains(notes, "query failed") {
+		t.Errorf("notes %q: want one note for the backend, not one per query", r.Notes)
+	}
+
+	// A crash loop is degraded on the instance signals alone.
+	orch.instances[0].CrashLooping = true
+	r, err = c.CheckRollout(context.Background(), rollout(), CheckOptions{Checkpoint: 15 * time.Minute})
+	if !errors.As(err, &be) || r.Verdict != StatusDegraded {
+		t.Errorf("crash loop with metrics down: verdict %s, err %v", r.Verdict, err)
+	}
+
+	// The MCP tool shows the report rather than an error.
+	if r, err := c.Check(context.Background(), svcAPI); err != nil || r.Outcome != OutcomeEvaluated {
+		t.Errorf("Check: %v, outcome %s", err, r.Outcome)
+	}
+
+	// The sweep too.
+	c.Now = func() time.Time { return sweepNow }
+	r, _, err = c.CheckSweep(context.Background(), svcAPI, &PreviousSweep{At: sweepNow.Add(-4 * time.Hour)})
+	if !errors.As(err, &be) || be.Kind != BackendMetrics {
+		t.Fatalf("sweep: error %v, want a metrics BackendError", err)
+	}
+	if s, _ := r.Signal(SignalMemoryLeak); s.Status != StatusNotEvaluated {
+		t.Errorf("sweep leak signal: %+v", s)
+	}
+	if r.Verdict != StatusDegraded {
+		t.Errorf("sweep verdict %s, want degraded on the crash loop", r.Verdict)
+	}
+}
+
+func TestCollector_OneQueryFailingIsANote(t *testing.T) {
+	m := busy(0.120)
+	m.fail, m.failMatch = errors.New("bad_data: parse error"), "container_cpu_usage_seconds"
+	c, _ := newCollector(m, rollout(), minute(15).Add(10*time.Second))
+	r, err := c.CheckRollout(context.Background(), rollout(), CheckOptions{Checkpoint: 15 * time.Minute})
+	if err != nil {
+		t.Fatalf("one failing query is no backend outage: %v", err)
+	}
+	if r.Verdict != StatusOK || !strings.Contains(strings.Join(r.Notes, "\n"), "CPU query failed") {
+		t.Errorf("verdict %s, notes %q", r.Verdict, r.Notes)
+	}
+}
+
+func TestCollector_OrchestrationFailing(t *testing.T) {
+	c, orch := newCollector(busy(0.120), rollout(), minute(15).Add(10*time.Second))
+	orch.err = errors.New("the server has asked for the client to provide credentials")
+	var be *BackendError
+	if _, err := c.CheckRollout(context.Background(), rollout(), CheckOptions{}); !errors.As(err, &be) || be.Kind != BackendOrchestration || be.Name != "kubernetes" {
+		t.Errorf("rollout: %v", err)
+	}
+	if _, _, err := c.CheckSweep(context.Background(), svcAPI, nil); !errors.As(err, &be) || be.Kind != BackendOrchestration {
+		t.Errorf("sweep: %v", err)
 	}
 }

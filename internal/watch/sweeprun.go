@@ -3,6 +3,7 @@ package watch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -59,6 +60,10 @@ func (c *SweepConfig) excluded(svc provider.Service) bool {
 type sweepServiceState struct {
 	state sweep.State
 	prev  *health.PreviousSweep
+	// retryAt is set when no channel took the service's last sweep
+	// message: that sweep is not recorded and runs again then.
+	retryAt time.Time
+	svc     provider.Service
 }
 
 type sweepRecord struct {
@@ -158,9 +163,30 @@ func (d *Daemon) coveredByRollout(ctx context.Context, svc provider.Service, now
 	return false, ""
 }
 
+// retrySweeps runs again the sweeps whose message no channel took. It
+// returns when the next retry is due, zero when none is.
+func (d *Daemon) retrySweeps(ctx context.Context) (time.Time, error) {
+	var next time.Time
+	for _, st := range d.sweeps {
+		if st.retryAt.IsZero() {
+			continue
+		}
+		if !st.retryAt.After(d.now()) {
+			if err := d.sweepService(ctx, st.svc); err != nil {
+				return time.Time{}, err
+			}
+		}
+		if !st.retryAt.IsZero() && (next.IsZero() || st.retryAt.Before(next)) {
+			next = st.retryAt
+		}
+	}
+	return next, nil
+}
+
 // sweepService checks one service, steps its state machine, notifies
-// what the machine says, and records the result. A backend error skips
-// the service until the next sweep.
+// what the machine says, and records the result. An orchestration error
+// skips the service until the next sweep; with the metrics backend
+// failing, the instance signals are still evaluated.
 func (d *Daemon) sweepService(ctx context.Context, svc provider.Service) error {
 	key := serviceKey(svc)
 	st := d.sweeps[key]
@@ -168,10 +194,22 @@ func (d *Daemon) sweepService(ctx context.Context, svc provider.Service) error {
 		st = &sweepServiceState{}
 		d.sweeps[key] = st
 	}
+	st.retryAt, st.svc = time.Time{}, svc
 	rep, counts, err := d.Sweep.Checker.CheckSweep(ctx, svc, st.prev)
 	if err != nil {
 		d.logger().Warn("sweep: check failed", slog.String("service", key), slog.String("error", err.Error()))
-		return nil
+		var be *health.BackendError
+		if !errors.As(err, &be) {
+			return nil
+		}
+		d.backendFailed(ctx, be, d.config(svc).StaleAfter)
+		if be.Kind != health.BackendMetrics {
+			return nil
+		}
+		d.backendOK(ctx, health.BackendOrchestration)
+	} else {
+		d.backendOK(ctx, health.BackendOrchestration)
+		d.backendOK(ctx, health.BackendMetrics)
 	}
 	next, note := sweep.Step(st.state, rep.Verdict, d.Sweep.State)
 
@@ -185,6 +223,12 @@ func (d *Daemon) sweepService(ctx context.Context, svc provider.Service) error {
 		msg := d.Notifier.sweepMessage(ctx, svc, rep, *note)
 		rec.Notified = &sweepNotifRecord{Event: note.Event, Severity: string(note.Severity), Title: msg.Title,
 			Delivered: d.Notifier.Send(ctx, msg)}
+		if len(rec.Notified.Delivered) == 0 && len(d.Notifier.Channels) > 0 {
+			st.retryAt = d.now().Add(retryAfter)
+			d.logger().Error("sweep: notification not delivered on any channel, retrying",
+				slog.String("service", key), slog.String("title", msg.Title))
+			return nil
+		}
 	}
 	if err := d.append(KindSweep, svc, rec); err != nil {
 		return err

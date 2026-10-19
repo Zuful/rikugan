@@ -29,6 +29,9 @@ type sweepChecker struct {
 	queue map[string][]health.Status
 	prevs map[string][]*health.PreviousSweep
 	fail  map[string]bool
+	// err is returned along with the report, as with a failing
+	// metrics backend.
+	err error
 }
 
 func (c *sweepChecker) CheckSweep(_ context.Context, svc provider.Service, prev *health.PreviousSweep) (health.Report, map[string]int, error) {
@@ -46,7 +49,7 @@ func (c *sweepChecker) CheckSweep(_ context.Context, svc provider.Service, prev 
 	}
 	return health.Report{Rollout: provider.Rollout{Sequence: "3"}, Outcome: health.OutcomeEvaluated, Verdict: v,
 			Signals: []health.SignalResult{{Name: "memory_leak", Status: v, Reason: "memory per replica 400 MiB → 600 MiB"}}},
-		map[string]int{key + "-pod": len(c.prevs[key])}, nil
+		map[string]int{key + "-pod": len(c.prevs[key])}, c.err
 }
 
 func svcIn(ns, name string) provider.Service {

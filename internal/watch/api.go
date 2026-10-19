@@ -23,10 +23,13 @@ type Verdict struct {
 	Revision   string    `json:"revision"`
 	Checkpoint string    `json:"checkpoint"`
 	Late       bool      `json:"late,omitempty"`
-	Outcome    string    `json:"outcome"`
-	Verdict    string    `json:"verdict,omitempty"`
-	Signals    []Signal  `json:"signals,omitempty"`
-	Notes      []string  `json:"notes,omitempty"`
+	// Partial is a check made with the metrics backend failing: only
+	// the instance signals were read.
+	Partial bool     `json:"partial,omitempty"`
+	Outcome string   `json:"outcome"`
+	Verdict string   `json:"verdict,omitempty"`
+	Signals []Signal `json:"signals,omitempty"`
+	Notes   []string `json:"notes,omitempty"`
 }
 
 // VerdictsResponse is the body of GET /v1/verdicts.
@@ -171,7 +174,7 @@ func readVerdicts(j *journal.Journal, q verdictQuery) ([]Verdict, error) {
 		}
 		out = append(out, Verdict{
 			Time: rec.Time, Service: rec.Service, Source: "rollout", Revision: c.Sequence,
-			Checkpoint: c.Checkpoint, Late: c.Late, Outcome: c.Outcome, Verdict: c.Verdict,
+			Checkpoint: c.Checkpoint, Late: c.Late, Partial: c.Partial, Outcome: c.Outcome, Verdict: c.Verdict,
 			Signals: c.Signals, Notes: c.Notes,
 		})
 		return nil
