@@ -9,7 +9,11 @@ services:
     container_name: rikugan-lab-prometheus
     restart: unless-stopped
     command:
+      # The image's default flags are replaced, the data path with them:
+      # set it, or the TSDB lands in /prometheus/data and ./lab.sh history
+      # writes where Prometheus does not read.
       - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
       - --storage.tsdb.retention.time=30d
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
