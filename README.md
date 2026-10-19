@@ -542,6 +542,23 @@ It runs as a **single instance**: a lock on the state directory makes a second o
 
 **With systemd**, `rikugan-serve.service` is a plain unit (not a template, single instance), with `StateDirectory=rikugan` for the journal, a dedicated user and systemd hardening; settings go in `/etc/rikugan/serve.env` ([example](./deploy/systemd/serve.env.example)).
 
+**Checking the setup: `rikugan doctor`.** It reads the environment as `rikugan serve` does and checks it end to end, as a checklist (✓ fine, ! worth a look, ✗ serve would not run or would run blind; exit code 1 on any ✗):
+
+- the verdicts API's listen/token rule;
+- the state directory (writable, and whether a running daemon holds it);
+- the health settings;
+- the metrics backend;
+- the watched namespaces and their services;
+- on Kubernetes, the RBAC rights the Helm chart's Role grants;
+- each service's current rollout, and each of its query templates, sent as a dry run over the last hour. A template the backend refuses fails. One that selects nothing, often a misspelt metric or label name that the daemon cannot tell from a quiet service, or that returns several series, is a warning;
+- the notification channels, the alerts backend, the heartbeat, the sweep and Compose settings.
+
+`rikugan doctor --send-test` also posts a test message on every channel and pings the heartbeat. Run it where the daemon runs, with its environment:
+
+- `kubectl exec deploy/<release>-rikugan-serve -- /rikugan doctor` (the chart's serve Deployment);
+- `docker exec rikugan-serve rikugan doctor`;
+- with systemd, `sudo -u rikugan sh -c 'set -a; . /etc/rikugan/serve.env; rikugan doctor'`.
+
 **Periodic sweep.** Every 4 hours (`RIKUGAN_SWEEP_INTERVAL`, `off` to disable), every service of the swept namespaces (`RIKUGAN_SWEEP_NAMESPACES`, default the watched ones; `RIKUGAN_SWEEP_EXCLUDE` leaves some out) is checked for what rollouts do not catch: a slow degradation, a dependency going down, a memory leak. The last hour is compared with the same hour a week earlier (a day earlier when the week is missing); restarts count since the previous sweep (on a service's first sweep, a lifetime restart count says nothing about now, so only a crash loop in progress and terminations in the last hour, attested OOM kills included, count); traffic only flags a collapse; a memory leak needs a steady rise of at least 25 % and 100 MiB per replica that traffic does not explain. Services with a rollout under 2 hours old are left to the rollout checks. Services that reach the same event in one sweep share one message (fifteen services degraded by a shared dependency send one critical listing them, not fifteen). Per service, a degraded sweep is notified `critical` once per incident and "resolved" after two OK sweeps in a row; an investigate verdict is only notified once it has lasted three sweeps in a row (`RIKUGAN_SWEEP_WARNING_PERSISTENCE`), or at once with `RIKUGAN_SWEEP_NOTIFY_WARNING=true`.
 
 **When a backend fails.** A check that cannot read the orchestration backend is retried every minute; with only the metrics backend failing, restarts and availability are still evaluated, and a degraded verdict on them is notified at once (recorded as `partial`, the checkpoint is checked in full once the metrics are back). Checks still failing past `stale_after` are recorded as not evaluated and given up, and the team gets one warning per outage ("rikugan cannot evaluate: metrics backend prometheus failing since …"), then an "evaluates again" message when it is back; the outage's start and its warning are journaled, so a daemon restarting more often than `stale_after` still warns, and only once. A message no channel takes is not recorded as sent: the check, or the service's sweep, runs again a minute later until a channel takes it. A backend that answers but refuses a query is not failing: the template is wrong. A query Prometheus rejects as such (`bad_data`, a parse error; `execution`) or a template that does not render leaves the signals it feeds unevaluated, and the team is warned once per template ("rikugan: template error_rate invalid"), whichever service meets it first and across restarts; editing the template and still getting it wrong warns again. At start, the daemon dry-runs every service's templates over the last 5 minutes, so a broken template is reported before a rollout needs it. A template that is valid but selects nothing (a misspelt metric name) returns no data rather than an error, and shows as insufficient data in the reports.

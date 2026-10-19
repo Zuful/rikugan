@@ -69,6 +69,17 @@ sees_demo() {
 }
 sees_demo "direct socket"
 
+# rikugan doctor, inside the daemon's container: the watched project is
+# seen, Prometheus (nothing listens) is not, so it fails.
+if doctor=$(docker exec rikugan-serve rikugan doctor); then
+  echo "rikugan doctor passed with no metrics backend:" >&2
+  echo "$doctor" >&2
+  exit 1
+fi
+grep -q '^✗ metrics backend' <<<"$doctor" || { echo "doctor: no metrics failure:" >&2; echo "$doctor" >&2; exit 1; }
+grep -Eq "^✓ orchestration +dockercompose, $WATCHED_PROJECT: 1 service" <<<"$doctor" || { echo "doctor: watched project not seen:" >&2; echo "$doctor" >&2; exit 1; }
+grep -Eq "^✓ $WATCHED_PROJECT/web +revision [0-9a-f]{12}, complete" <<<"$doctor" || { echo "doctor: web's rollout not read:" >&2; echo "$doctor" >&2; exit 1; }
+
 if docker compose -f "$file" up -d --scale rikugan-serve=2 >/dev/null 2>&1; then
   echo "a second instance started: container_name must prevent it" >&2
   exit 1

@@ -163,13 +163,24 @@ func (c *Collector) CheckRollout(ctx context.Context, rollout provider.Rollout, 
 	return r, nil
 }
 
-// ValidateTemplates sends each of the service's query templates as a
-// dry run over the last few minutes, and returns those that cannot
-// work as written: they do not render, or the backend refuses them. An
-// error means the backend itself failed every query: nothing was
-// validated. An empty result is not checked: a service may have served
-// no 5xx, or no request at all, lately.
-func (c *Collector) ValidateTemplates(ctx context.Context, svc provider.Service) ([]InvalidTemplate, error) {
+// TemplateProbe is one query template sent as a dry run.
+type TemplateProbe struct {
+	// Name is the template's settings key: request_rate, error_rate…
+	Name     string
+	Template string
+	// Invalid is set when the template does not render or the backend
+	// refused it; Err says why.
+	Invalid bool
+	Err     string
+	// Series is how many series the query returned: 0 is a template
+	// that selects nothing, often a wrong metric or label name.
+	Series int
+}
+
+// ProbeTemplates sends each of the service's query templates as a dry
+// run over the last span, and says what each one returned. An error
+// means the backend itself failed every query: nothing was probed.
+func (c *Collector) ProbeTemplates(ctx context.Context, svc provider.Service, span time.Duration) ([]TemplateProbe, error) {
 	now := time.Now()
 	if c.Now != nil {
 		now = c.Now()
@@ -178,9 +189,8 @@ func (c *Collector) ValidateTemplates(ctx context.Context, svc provider.Service)
 	if c.Settings != nil {
 		_, tpl = c.Settings(svc)
 	}
-	const span = 5 * time.Minute
 	vars := templateVars{Namespace: svc.Namespace, Service: svc.Name, Window: fmt.Sprintf("%ds", int(span.Seconds()))}
-	inv := &invalidTemplates{}
+	var out []TemplateProbe
 	sent, failed := 0, 0
 	var firstErr error
 	for _, q := range []struct{ key, tpl string }{
@@ -194,12 +204,21 @@ func (c *Collector) ValidateTemplates(ctx context.Context, svc provider.Service)
 		if q.tpl == "" {
 			continue
 		}
+		probe := TemplateProbe{Name: q.key, Template: q.tpl}
+		inv := &invalidTemplates{}
 		query, err := render(q.tpl, vars)
-		if inv.add(q.key, q.tpl, err) || err != nil {
+		if inv.add(q.key, q.tpl, err) {
+			probe.Invalid, probe.Err = true, err.Error()
+			out = append(out, probe)
 			continue
 		}
-		_, err = c.Metrics.GetMetric(ctx, query, now.Add(-span), now, seriesStep)
+		if err != nil {
+			continue // a name render refuses: not the template's fault
+		}
+		samples, err := c.Metrics.GetMetric(ctx, query, now.Add(-span), now, seriesStep)
 		if inv.add(q.key, q.tpl, err) {
+			probe.Invalid, probe.Err = true, err.Error()
+			out = append(out, probe)
 			continue
 		}
 		sent++
@@ -208,12 +227,35 @@ func (c *Collector) ValidateTemplates(ctx context.Context, svc provider.Service)
 			if firstErr == nil {
 				firstErr = err
 			}
+			continue
 		}
+		_, probe.Series = singleSeries(samples, 0)
+		out = append(out, probe)
 	}
 	if sent > 0 && failed == sent {
 		return nil, &BackendError{Kind: BackendMetrics, Name: c.Metrics.Name(), Err: firstErr}
 	}
-	return inv.list, nil
+	return out, nil
+}
+
+// ValidateTemplates sends each of the service's query templates as a
+// dry run over the last few minutes, and returns those that cannot
+// work as written: they do not render, or the backend refuses them. An
+// error means the backend itself failed every query: nothing was
+// validated. An empty result is not checked: a service may have served
+// no 5xx, or no request at all, lately.
+func (c *Collector) ValidateTemplates(ctx context.Context, svc provider.Service) ([]InvalidTemplate, error) {
+	probes, err := c.ProbeTemplates(ctx, svc, 5*time.Minute)
+	if err != nil {
+		return nil, err
+	}
+	var out []InvalidTemplate
+	for _, p := range probes {
+		if p.Invalid {
+			out = append(out, InvalidTemplate{Name: p.Name, Template: p.Template, Err: p.Err})
+		}
+	}
+	return out, nil
 }
 
 func (c *Collector) orchestrationError(err error) error {
