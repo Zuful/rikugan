@@ -1,0 +1,30 @@
+# The watched project: two services built from the same instrumented
+# app. ./lab.sh deploy rewrites state/<service>.env and recreates the
+# service, which Compose sees as a new revision (a new config-hash).
+name: lab-shop
+
+x-app: &app
+  image: rikugan-lab-app:local
+  restart: unless-stopped
+  environment:
+    LOAD_RPS: "0" # the traffic comes from the loadgen
+  healthcheck:
+    test: ["CMD", "/app", "healthcheck"]
+    interval: 5s
+    timeout: 2s
+    retries: 2
+  mem_limit: 768m
+  networks: [lab]
+
+services:
+  web:
+    <<: *app
+    env_file: state/web.env
+  api:
+    <<: *app
+    env_file: state/api.env
+
+networks:
+  lab:
+    name: rikugan-lab
+    external: true

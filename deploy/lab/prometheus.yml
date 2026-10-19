@@ -1,0 +1,18 @@
+# Scrapes every replica of the shop's services (Docker's DNS returns one
+# address per container) and labels the series with namespace (the
+# Compose project) and service, the labels rikugan's templates select on.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+scrape_configs:
+  - job_name: shop
+    dns_sd_configs:
+      - names: [web, api]
+        type: A
+        port: 8080
+        refresh_interval: 10s
+    relabel_configs:
+      - target_label: namespace
+        replacement: lab-shop
+      - source_labels: [__meta_dns_name]
+        target_label: service

@@ -1,0 +1,7 @@
+# rikugan's health settings for the lab. The request templates are the
+# defaults; resources come from the app's own process metrics, since the
+# default ones (cAdvisor, pods named after a Deployment) are Kubernetes'.
+defaults:
+  templates:
+    cpu: avg(rate(process_cpu_seconds_total{namespace="{{.Namespace}}",service="{{.Service}}"}[1m]))
+    memory: avg(process_resident_memory_bytes{namespace="{{.Namespace}}",service="{{.Service}}"})
