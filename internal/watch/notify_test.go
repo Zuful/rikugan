@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -71,21 +72,27 @@ type fakeChannel struct {
 	mu    sync.Mutex
 	fails int // failures before succeeding; -1 always fails
 	msgs  []provider.TeamMessage
+	// refs makes the channel return a reference per message: its
+	// number, from 1.
+	refs bool
 }
 
 func (f *fakeChannel) Name() string { return f.name }
 
-func (f *fakeChannel) PostMessage(_ context.Context, m provider.TeamMessage) error {
+func (f *fakeChannel) PostMessage(_ context.Context, m provider.TeamMessage) (provider.MessageRef, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.fails != 0 {
 		if f.fails > 0 {
 			f.fails--
 		}
-		return errors.New("telegram unreachable")
+		return "", errors.New("telegram unreachable")
 	}
 	f.msgs = append(f.msgs, m)
-	return nil
+	if !f.refs {
+		return "", nil
+	}
+	return provider.MessageRef(strconv.Itoa(len(f.msgs))), nil
 }
 
 func (f *fakeChannel) titles() string {
@@ -226,5 +233,39 @@ func TestNotificationStateSurvivesARestart(t *testing.T) {
 	h.at(16 * time.Minute).due()
 	if got := tg.titles(); got != "[critical] prod/api: revision 2 degraded (+5m0s)" {
 		t.Errorf("messages:\n%s", got)
+	}
+}
+
+// A critical records each channel's reference to the message, and a
+// reply threads under it where there is one, quoting the title where
+// there is none.
+func TestCriticalRefsAndReply(t *testing.T) {
+	h := newHarness(t)
+	tg := &fakeChannel{name: "telegram", refs: true}
+	hook := &fakeChannel{name: "slack"}
+	h.d.Checker = &verdictChecker{verdicts: map[time.Duration]health.Status{0: health.StatusDegraded}}
+	h.d.Notifier = &Notifier{Channels: []provider.CommunicationProvider{tg, hook}}
+
+	failed := provider.Rollout{Service: api, Sequence: "2", State: provider.RolloutFailed, StartedAt: t0, FailedAt: t0.Add(10 * time.Minute)}
+	h.source.current = failed
+	h.at(10 * time.Minute).handle(failed)
+	if h.count(`"delivered":["telegram","slack"],"refs":{"telegram":"1"}`) != 1 {
+		t.Fatalf("the critical's refs are not recorded:\n%s", strings.Join(h.records(), "\n"))
+	}
+
+	refs := map[string]provider.MessageRef{"telegram": "1"}
+	got := h.d.Notifier.Reply(context.Background(), refs, tg.msgs[0].Title, provider.TeamMessage{Title: "Investigation"})
+	if len(got) != 2 {
+		t.Fatalf("reply delivered to %v", got)
+	}
+	want := map[*fakeChannel]provider.Reply{
+		tg:   {Ref: "1", Title: "prod/api: revision 2 degraded (rollout failure)"},
+		hook: {Title: "prod/api: revision 2 degraded (rollout failure)"},
+	}
+	for ch, w := range want {
+		r := ch.msgs[len(ch.msgs)-1].ReplyTo
+		if r == nil || *r != w {
+			t.Errorf("%s: reply to %+v, want %+v", ch.name, r, w)
+		}
 	}
 }

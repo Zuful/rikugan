@@ -574,7 +574,7 @@ It runs as a **single instance**: a lock on the state directory makes a second o
 - bounds what each tool returns before it reaches the agent's model: 200 lines for the log tools, 32 KiB for any tool, with a note saying what was cut;
 - leaves out the four tools that return log lines (`get_logs`, `search_logs`, `tail_logs`, `detect_log_anomalies`) with `RIKUGAN_ESCALATION_LOGS=off`. **Tool outputs, logs included, with whatever personal data they hold, are sent to the agent's LLM provider**: under the GDPR, that is a transfer to decide on, and this option keeps the logs out of it.
 
-**Notifications** go to every configured channel (Telegram, Slack; see `TELEGRAM_*` and `SLACK_WEBHOOK_URL`): a degraded verdict or a failed rollout is `critical`, an investigate verdict a `warning`; OK verdicts are only sent with `RIKUGAN_NOTIFY_ON_OK=true`. Each rollout gets one notification, and a later checkpoint only notifies again when the verdict gets worse, with one exception: after a critical, the first checkpoint back below degraded sends a single "recovered" message (insufficient data never counts as recovered). When an alerts backend is configured, alerts already firing for the service are mentioned in the message.
+**Notifications** go to every configured channel (Telegram, Slack; see `TELEGRAM_*` and `SLACK_*`): a degraded verdict or a failed rollout is `critical`, an investigate verdict a `warning`; OK verdicts are only sent with `RIKUGAN_NOTIFY_ON_OK=true`. Each rollout gets one notification, and a later checkpoint only notifies again when the verdict gets worse, with one exception: after a critical, the first checkpoint back below degraded sends a single "recovered" message (insufficient data never counts as recovered). When an alerts backend is configured, alerts already firing for the service are mentioned in the message.
 
 ### Docker
 
@@ -660,6 +660,8 @@ You can also wire one entry per per-concept binary if you prefer to keep them is
 | `TELEGRAM_BOT_TOKEN`        | Telegram bot token (from @BotFather)                          | For proactive-mode notifications to Telegram (read by `rikugan serve`, in progress) |
 | `TELEGRAM_CHAT_ID`          | Chat or channel the bot posts to                              | With `TELEGRAM_BOT_TOKEN` |
 | `SLACK_WEBHOOK_URL`         | Slack incoming-webhook URL (https)                            | For proactive-mode notifications to Slack (read by `rikugan serve`, in progress) |
+| `SLACK_BOT_TOKEN`           | Slack bot token (`xoxb-…`, scope `chat:write`), instead of the webhook: only a bot can answer a message in its thread (a webhook reply quotes the message instead). Setting both is refused | Alternative to `SLACK_WEBHOOK_URL` |
+| `SLACK_CHANNEL`             | ID of the channel the bot posts to (`C…`); invite the bot to it | With `SLACK_BOT_TOKEN` |
 | `RIKUGAN_STATE_DIR`         | `rikugan serve`: journal and lock directory (local disk, not NFS) | No (defaults to `/var/lib/rikugan`) |
 | `RIKUGAN_SERVE_NAMESPACES`  | `rikugan serve`: comma-separated namespaces (Compose projects on Docker Compose) whose rollouts are watched | Outside a pod (in a pod, defaults to its own namespace; on Compose, to `COMPOSE_PROJECT_NAME`) |
 | `RIKUGAN_COMPOSE_ROLLOUT_DEADLINE` | Docker Compose: time after which a revision whose containers are not all ready is failed | No (defaults to `10m`) |

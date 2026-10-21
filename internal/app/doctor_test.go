@@ -77,9 +77,9 @@ type doctorChannel struct {
 }
 
 func (c *doctorChannel) Name() string { return "telegram" }
-func (c *doctorChannel) PostMessage(_ context.Context, m provider.TeamMessage) error {
+func (c *doctorChannel) PostMessage(_ context.Context, m provider.TeamMessage) (provider.MessageRef, error) {
 	c.sent = append(c.sent, m)
-	return c.err
+	return "", c.err
 }
 
 func doctorEnv(t *testing.T) {

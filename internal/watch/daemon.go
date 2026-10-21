@@ -166,8 +166,11 @@ type (
 		Severity   string `json:"severity"`
 		Title      string `json:"title"`
 		// Delivered lists the channels that took the message.
-		Delivered []string    `json:"delivered,omitempty"`
-		State     notifyState `json:"state"`
+		Delivered []string `json:"delivered,omitempty"`
+		// Refs is each channel's reference to the message, for a reply
+		// in its thread; channels that give none are absent.
+		Refs  map[string]provider.MessageRef `json:"refs,omitempty"`
+		State notifyState                    `json:"state"`
 	}
 )
 
@@ -581,9 +584,10 @@ func (d *Daemon) check(ctx context.Context, rs *rolloutState, cp time.Duration, 
 		next, dec := decide(rs.notify, report.Verdict, d.Notifier.NotifyOnOK)
 		if dec != nil {
 			msg := d.Notifier.message(ctx, c, *dec)
+			delivered, refs := d.Notifier.Post(ctx, msg)
 			note = &notificationRecord{
 				Sequence: r.Label(), Checkpoint: cp.String(), Event: dec.Event, Severity: string(dec.Severity),
-				Title: msg.Title, Delivered: d.Notifier.Send(ctx, msg), State: next,
+				Title: msg.Title, Delivered: delivered, Refs: refs, State: next,
 			}
 			// No channel took it: nothing is recorded, so the check and
 			// its message are tried again rather than lost.

@@ -159,7 +159,7 @@ cmd_up() {
     set_env RIKUGAN_SERVE_TOKEN "$(openssl rand -hex 24)"
     echo "created .env with a fresh API token"
   fi
-  if [ -z "$(env_value TELEGRAM_BOT_TOKEN)" ] && [ -z "$(env_value SLACK_WEBHOOK_URL)" ]; then
+  if [ -z "$(env_value TELEGRAM_BOT_TOKEN)" ] && [ -z "$(env_value SLACK_WEBHOOK_URL)" ] && [ -z "$(env_value SLACK_BOT_TOKEN)" ]; then
     echo "note: no notification channel in .env, verdicts are recorded but not sent"
   fi
   for s in $SERVICES; do [ -f "state/$s.env" ] || write_env "$s" healthy; done

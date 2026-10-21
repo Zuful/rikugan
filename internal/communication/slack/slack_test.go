@@ -35,7 +35,7 @@ func TestPostMessage_SendsMrkdwnText(t *testing.T) {
 	defer srv.Close()
 
 	p := newTestProvider(t, srv, "/services/T000/B000/XXXX")
-	err := p.PostMessage(context.Background(), provider.TeamMessage{
+	_, err := p.PostMessage(context.Background(), provider.TeamMessage{
 		Severity: provider.SeverityCritical,
 		Title:    "checkout: degraded",
 		Body:     "5xx rate 6% (was 0.2%)",
@@ -58,7 +58,7 @@ func TestPostMessage_RevokedWebhookHint(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	err := newTestProvider(t, srv, "/services/SECRET").PostMessage(context.Background(), provider.TeamMessage{Title: "t"})
+	_, err := newTestProvider(t, srv, "/services/SECRET").PostMessage(context.Background(), provider.TeamMessage{Title: "t"})
 	if err == nil || !strings.Contains(err.Error(), "SLACK_WEBHOOK_URL") {
 		t.Fatalf("got %v, want the webhook hint", err)
 	}
@@ -102,5 +102,104 @@ func TestFromEnv(t *testing.T) {
 	p, err := FromEnv(nil)
 	if err != nil || p.Name() != "communication/slack" || p.Tools() != nil {
 		t.Errorf("configured: %v, %v", p, err)
+	}
+}
+
+func TestBot_PostsReturnsTheTSAndThreads(t *testing.T) {
+	var auth string
+	var got postMessageRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth = r.Header.Get("Authorization")
+		got = postMessageRequest{}
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		if r.URL.Path != "/chat.postMessage" {
+			t.Errorf("path %q", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"ok":true,"ts":"1729.0001"}`))
+	}))
+	defer srv.Close()
+	apiURL = srv.URL
+	p, err := NewBot("xoxb-1-2", "C0123", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ref, err := p.PostMessage(context.Background(), provider.TeamMessage{Severity: provider.SeverityCritical, Title: "critical"})
+	if err != nil || ref != "1729.0001" {
+		t.Fatalf("ref %q, err %v", ref, err)
+	}
+	if auth != "Bearer xoxb-1-2" || got.Channel != "C0123" || got.ThreadTS != "" || got.UnfurlLinks {
+		t.Errorf("auth %q, request %+v", auth, got)
+	}
+	if _, err := p.PostMessage(context.Background(), provider.TeamMessage{
+		Title: "Investigation", ReplyTo: &provider.Reply{Ref: ref, Title: "critical"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got.ThreadTS != "1729.0001" || strings.Contains(got.Text, "Re:") {
+		t.Errorf("reply request %+v", got)
+	}
+}
+
+func TestBot_SlackRefusalWithHint(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":false,"error":"not_in_channel"}`))
+	}))
+	defer srv.Close()
+	apiURL = srv.URL
+	p, _ := NewBot("xoxb-SECRET", "C0123", nil)
+	_, err := p.PostMessage(context.Background(), provider.TeamMessage{Title: "t"})
+	if err == nil || !strings.Contains(err.Error(), "not_in_channel") || !strings.Contains(err.Error(), "invite the bot") {
+		t.Fatalf("got %v", err)
+	}
+	if strings.Contains(err.Error(), "SECRET") {
+		t.Errorf("error leaks the token: %v", err)
+	}
+}
+
+// A webhook cannot thread: a reply quotes the message it answers, even
+// given a reference.
+func TestWebhook_ReplyQuotes(t *testing.T) {
+	var got map[string]string
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+	ref, err := newTestProvider(t, srv, "/services/X").PostMessage(context.Background(), provider.TeamMessage{
+		Title: "Investigation", ReplyTo: &provider.Reply{Ref: "1729.0001", Title: "api <degraded>"},
+	})
+	if err != nil || ref != "" {
+		t.Fatalf("ref %q, err %v", ref, err)
+	}
+	if !strings.HasPrefix(got["text"], "↪ Re: api &lt;degraded&gt;\n") {
+		t.Errorf("text %q", got["text"])
+	}
+}
+
+func TestFromEnv_BotOrWebhook(t *testing.T) {
+	for _, tc := range []struct {
+		token, channel, webhook, fails string
+		bot                            bool
+	}{
+		{webhook: "https://hooks.slack.com/services/X"},
+		{token: "xoxb-1", channel: "C1", bot: true},
+		{token: "xoxb-1", channel: "C1", webhook: "https://hooks.slack.com/services/X", fails: "not both"},
+		{token: "xoxb-1", fails: "SLACK_CHANNEL"},
+		{token: "xoxp-user", channel: "C1", fails: "bot token"},
+	} {
+		t.Setenv("SLACK_BOT_TOKEN", tc.token)
+		t.Setenv("SLACK_CHANNEL", tc.channel)
+		t.Setenv("SLACK_WEBHOOK_URL", tc.webhook)
+		p, err := FromEnv(nil)
+		if tc.fails != "" {
+			if err == nil || !strings.Contains(err.Error(), tc.fails) {
+				t.Errorf("%+v: err %v, want %q", tc, err, tc.fails)
+			}
+			continue
+		}
+		if err != nil || (p.botToken != "") != tc.bot {
+			t.Errorf("%+v: provider %+v, err %v", tc, p, err)
+		}
 	}
 }

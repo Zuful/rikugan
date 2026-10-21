@@ -118,19 +118,49 @@ func (n *Notifier) logger() *slog.Logger {
 // Send delivers msg to every channel, retrying each a few times. It
 // returns the channels that took it.
 func (n *Notifier) Send(ctx context.Context, msg provider.TeamMessage) []string {
-	var delivered []string
+	delivered, _ := n.Post(ctx, msg)
+	return delivered
+}
+
+// Post is Send, also returning the reference each channel gave the
+// message, for a later reply; a channel that gives none is absent.
+func (n *Notifier) Post(ctx context.Context, msg provider.TeamMessage) (delivered []string, refs map[string]provider.MessageRef) {
+	return n.post(ctx, func(provider.CommunicationProvider) provider.TeamMessage { return msg })
+}
+
+// Reply answers an earlier message on every channel: in its thread
+// where Post recorded a reference for that channel, quoting title
+// elsewhere.
+func (n *Notifier) Reply(ctx context.Context, refs map[string]provider.MessageRef, title string, msg provider.TeamMessage) []string {
+	delivered, _ := n.post(ctx, func(ch provider.CommunicationProvider) provider.TeamMessage {
+		m := msg
+		m.ReplyTo = &provider.Reply{Ref: refs[ch.Name()], Title: title}
+		return m
+	})
+	return delivered
+}
+
+func (n *Notifier) post(ctx context.Context, msgFor func(provider.CommunicationProvider) provider.TeamMessage) (delivered []string, refs map[string]provider.MessageRef) {
 	for _, ch := range n.Channels {
+		msg := msgFor(ch)
 		var err error
 		for attempt := 0; attempt <= n.Retries; attempt++ {
 			if attempt > 0 {
 				select {
 				case <-ctx.Done():
-					return delivered
+					return delivered, refs
 				case <-time.After(n.Backoff):
 				}
 			}
-			if err = ch.PostMessage(ctx, msg); err == nil {
+			var ref provider.MessageRef
+			if ref, err = ch.PostMessage(ctx, msg); err == nil {
 				delivered = append(delivered, ch.Name())
+				if ref != "" {
+					if refs == nil {
+						refs = map[string]provider.MessageRef{}
+					}
+					refs[ch.Name()] = ref
+				}
 				break
 			}
 		}
@@ -139,7 +169,7 @@ func (n *Notifier) Send(ctx context.Context, msg provider.TeamMessage) []string 
 				slog.String("title", msg.Title), slog.String("error", err.Error()))
 		}
 	}
-	return delivered
+	return delivered, refs
 }
 
 // openAlerts returns the titles of the alerts firing for the service.

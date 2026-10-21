@@ -25,7 +25,7 @@ func TestPostMessage_SendsHTMLToTheChat(t *testing.T) {
 	baseURL = srv.URL
 
 	p := New("123:ABC", "-100042", slog.Default())
-	err := p.PostMessage(context.Background(), provider.TeamMessage{
+	_, err := p.PostMessage(context.Background(), provider.TeamMessage{
 		Severity: provider.SeverityCritical,
 		Title:    "checkout: degraded",
 		Body:     "5xx rate 6% (was 0.2%)",
@@ -55,7 +55,7 @@ func TestPostMessage_SurfacesTelegramRefusal(t *testing.T) {
 	defer srv.Close()
 	baseURL = srv.URL
 
-	err := New("123:SECRET", "1", nil).PostMessage(context.Background(), provider.TeamMessage{Title: "t"})
+	_, err := New("123:SECRET", "1", nil).PostMessage(context.Background(), provider.TeamMessage{Title: "t"})
 	if err == nil || !strings.Contains(err.Error(), "chat not found") {
 		t.Fatalf("got %v, want Telegram's description", err)
 	}
@@ -71,7 +71,7 @@ func TestPostMessage_BadTokenHint(t *testing.T) {
 	defer srv.Close()
 	baseURL = srv.URL
 
-	err := New("bad", "1", nil).PostMessage(context.Background(), provider.TeamMessage{Title: "t"})
+	_, err := New("bad", "1", nil).PostMessage(context.Background(), provider.TeamMessage{Title: "t"})
 	if err == nil || !strings.Contains(err.Error(), "TELEGRAM_BOT_TOKEN") {
 		t.Fatalf("got %v, want the token hint", err)
 	}
@@ -129,5 +129,51 @@ func TestFromEnv(t *testing.T) {
 	p, err := FromEnv(nil)
 	if err != nil || p.Name() != "communication/telegram" || p.Tools() != nil {
 		t.Errorf("configured: %v, %v", p, err)
+	}
+}
+
+func TestPostMessage_ReturnsTheMessageIDAndThreadsReplies(t *testing.T) {
+	var got sendMessageRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = sendMessageRequest{}
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":4242}}`))
+	}))
+	defer srv.Close()
+	baseURL = srv.URL
+	p := New("123:ABC", "-100042", nil)
+
+	ref, err := p.PostMessage(context.Background(), provider.TeamMessage{Title: "critical"})
+	if err != nil || ref != "4242" {
+		t.Fatalf("ref %q, err %v; want 4242", ref, err)
+	}
+	if got.ReplyParameters != nil {
+		t.Errorf("a message that answers nothing has reply parameters: %+v", got.ReplyParameters)
+	}
+
+	if _, err := p.PostMessage(context.Background(), provider.TeamMessage{
+		Title: "Investigation", ReplyTo: &provider.Reply{Ref: ref, Title: "critical"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if rp := got.ReplyParameters; rp == nil || rp.MessageID != 4242 || !rp.AllowSendingWithoutReply {
+		t.Errorf("reply parameters %+v", rp)
+	}
+	if strings.Contains(got.Text, "Re:") {
+		t.Errorf("a threaded reply also quotes: %q", got.Text)
+	}
+
+	// Without a reference, the reply quotes the message it answers.
+	if _, err := p.PostMessage(context.Background(), provider.TeamMessage{
+		Title: "Investigation", ReplyTo: &provider.Reply{Title: "api <degraded>"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got.ReplyParameters != nil || !strings.HasPrefix(got.Text, "↪ Re: api &lt;degraded&gt;\n") {
+		t.Errorf("quote reply: parameters %+v, text %q", got.ReplyParameters, got.Text)
+	}
+
+	if _, err := p.PostMessage(context.Background(), provider.TeamMessage{ReplyTo: &provider.Reply{Ref: "ts.123"}}); err == nil {
+		t.Error("a reference that is not a message id was accepted")
 	}
 }
