@@ -129,7 +129,7 @@ Returns the noteworthy orchestration events attached to the service in the lookb
 
 #### `restart_service`
 
-Triggers a rolling restart. For Kubernetes that patches the deployment with the standard `kubectl.kubernetes.io/restartedAt` annotation; for Docker Compose it runs `docker compose restart <service>`. **Mutating** — make sure the operator intends it.
+Triggers a rolling restart. For Kubernetes that patches the deployment with the standard `kubectl.kubernetes.io/restartedAt` annotation; for Docker Compose it runs `docker compose restart <service>`. **Mutating** — make sure the operator intends it. It is the only tool that changes anything, and `RIKUGAN_READ_ONLY=true` leaves it out.
 
 | Parameter   | Type   | Required | Description           |
 |-------------|--------|----------|-----------------------|
@@ -665,6 +665,7 @@ You can also wire one entry per per-concept binary if you prefer to keep them is
 | `RIKUGAN_SWEEP_NOTIFY_WARNING` | `rikugan serve`: notify every sweep warning (`true`)       | No (defaults to off: only persistent warnings) |
 | `RIKUGAN_SWEEP_WARNING_PERSISTENCE` | `rikugan serve`: consecutive investigate sweeps before a warning is sent | No (defaults to `3`) |
 | `RIKUGAN_NOTIFY_ON_OK`      | `rikugan serve`: also notify OK verdicts (`true`)             | No (defaults to off) |
+| `RIKUGAN_READ_ONLY`         | `true` registers only the tools that read (today, every tool but `restart_service`), whatever the backends' credentials allow. Any value other than `true` or `false` refuses to start | No (defaults to `false`) |
 | `RIKUGAN_LOG_LEVEL`         | Log verbosity: `debug` / `info` / `warn` / `error`            | No (defaults to `info`) |
 
 > **Graceful by design.** Missing config = skipped backend. Rikugan logs which providers were activated and which were skipped at startup, so you always know what's available.

@@ -44,7 +44,10 @@ import (
 // k8s client and prometheus to be present.
 func Setup(logger *slog.Logger, version string) (*server.MCPServer, error) {
 	mcpSrv := pkgmcp.NewServer("rikugan", version)
-	d := dispatcher.New(mcpSrv, logger)
+	d, err := newDispatcher(mcpSrv, logger)
+	if err != nil {
+		return nil, err
+	}
 
 	// ── Kubernetes is required — one client, three registrations:
 	//    orchestration concept (+ k8s-backed find_pods_by_service_name),
@@ -101,6 +104,23 @@ func Setup(logger *slog.Logger, version string) (*server.MCPServer, error) {
 	return mcpSrv, nil
 }
 
+// newDispatcher builds the dispatcher every Setup registers through,
+// read-only when RIKUGAN_READ_ONLY=true. Any other value than true,
+// false or unset refuses to start: a misspelt safety switch must not
+// leave the write tools on.
+func newDispatcher(srv *server.MCPServer, logger *slog.Logger) (*dispatcher.Dispatcher, error) {
+	readOnly := false
+	switch v := os.Getenv("RIKUGAN_READ_ONLY"); v {
+	case "", "false":
+	case "true":
+		readOnly = true
+		logger.Info("read-only mode: tools that change something are not registered")
+	default:
+		return nil, fmt.Errorf("RIKUGAN_READ_ONLY=%q: want true or false", v)
+	}
+	return dispatcher.New(srv, logger, dispatcher.WithReadOnly(readOnly)), nil
+}
+
 // SetupOrchestration constructs an MCP server that registers only the
 // orchestration concept. The backend is selected by
 // ORCHESTRATION_PROVIDER: when set to "dockercompose" the kubernetes
@@ -112,7 +132,10 @@ func Setup(logger *slog.Logger, version string) (*server.MCPServer, error) {
 // Used by cmd/orchestration-mcp.
 func SetupOrchestration(logger *slog.Logger, version string) (*server.MCPServer, error) {
 	mcpSrv := pkgmcp.NewServer("rikugan-orchestration", version)
-	d := dispatcher.New(mcpSrv, logger)
+	d, err := newDispatcher(mcpSrv, logger)
+	if err != nil {
+		return nil, err
+	}
 
 	var k8sClient kubernetes.Interface
 	if os.Getenv("ORCHESTRATION_PROVIDER") != "dockercompose" {
@@ -133,7 +156,10 @@ func SetupOrchestration(logger *slog.Logger, version string) (*server.MCPServer,
 // cmd/logs-mcp.
 func SetupLogs(logger *slog.Logger, version string) (*server.MCPServer, error) {
 	mcpSrv := pkgmcp.NewServer("rikugan-logs", version)
-	d := dispatcher.New(mcpSrv, logger)
+	d, err := newDispatcher(mcpSrv, logger)
+	if err != nil {
+		return nil, err
+	}
 
 	if err := registerLogsConcept(d, logger); err != nil {
 		return nil, err
@@ -148,7 +174,10 @@ func SetupLogs(logger *slog.Logger, version string) (*server.MCPServer, error) {
 // the unified binary.
 func SetupMetrics(logger *slog.Logger, version string) (*server.MCPServer, error) {
 	mcpSrv := pkgmcp.NewServer("rikugan-metrics", version)
-	d := dispatcher.New(mcpSrv, logger)
+	d, err := newDispatcher(mcpSrv, logger)
+	if err != nil {
+		return nil, err
+	}
 
 	if _, _, err := registerMetricsConcept(d, logger); err != nil {
 		return nil, err
@@ -162,7 +191,10 @@ func SetupMetrics(logger *slog.Logger, version string) (*server.MCPServer, error
 // those backends are configured). Used by cmd/alerts-mcp.
 func SetupAlerts(logger *slog.Logger, version string) (*server.MCPServer, error) {
 	mcpSrv := pkgmcp.NewServer("rikugan-alerts", version)
-	d := dispatcher.New(mcpSrv, logger)
+	d, err := newDispatcher(mcpSrv, logger)
+	if err != nil {
+		return nil, err
+	}
 
 	if err := registerAlertsConcept(d, logger); err != nil {
 		return nil, err
