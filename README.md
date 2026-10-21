@@ -567,6 +567,13 @@ It runs as a **single instance**: a lock on the state directory makes a second o
 
 **Verdicts API.** `GET /v1/verdicts?service=<namespace/name or name>&since=<6h or RFC 3339>&limit=<n>` returns the recorded verdicts, newest first; `GET /healthz` answers without data. It listens on `RIKUGAN_SERVE_LISTEN` (default `127.0.0.1:8080`). On a loopback address the token is optional; on any other address (`0.0.0.0`, `:8080`, a non-loopback IP) `rikugan serve` refuses to start without `RIKUGAN_SERVE_TOKEN`, then requires `Authorization: Bearer <token>`, compared in constant time. The MCP tool `get_watch_reports` reads this API: point it at the daemon with `RIKUGAN_SERVE_URL` (and `RIKUGAN_SERVE_TOKEN`).
 
+**Agent MCP server.** For the escalation of a critical to an investigating agent (in progress), `rikugan serve` can also serve rikugan's tools over MCP Streamable HTTP at `/mcp` on `RIKUGAN_AGENT_MCP_LISTEN` (off when unset). The agent then holds no backend credential: rikugan calls the backends for it. This server:
+
+- is read-only whatever `RIKUGAN_READ_ONLY` says;
+- always requires `Authorization: Bearer <RIKUGAN_AGENT_MCP_TOKEN>`, on loopback too, because this port reaches every backend. The token must have at least 32 characters (`openssl rand -hex 32`) and differ from `RIKUGAN_SERVE_TOKEN`;
+- bounds what each tool returns before it reaches the agent's model: 200 lines for the log tools, 32 KiB for any tool, with a note saying what was cut;
+- leaves out the four tools that return log lines (`get_logs`, `search_logs`, `tail_logs`, `detect_log_anomalies`) with `RIKUGAN_ESCALATION_LOGS=off`. **Tool outputs, logs included, with whatever personal data they hold, are sent to the agent's LLM provider**: under the GDPR, that is a transfer to decide on, and this option keeps the logs out of it.
+
 **Notifications** go to every configured channel (Telegram, Slack; see `TELEGRAM_*` and `SLACK_WEBHOOK_URL`): a degraded verdict or a failed rollout is `critical`, an investigate verdict a `warning`; OK verdicts are only sent with `RIKUGAN_NOTIFY_ON_OK=true`. Each rollout gets one notification, and a later checkpoint only notifies again when the verdict gets worse, with one exception: after a critical, the first checkpoint back below degraded sends a single "recovered" message (insufficient data never counts as recovered). When an alerts backend is configured, alerts already firing for the service are mentioned in the message.
 
 ### Docker
@@ -665,6 +672,9 @@ You can also wire one entry per per-concept binary if you prefer to keep them is
 | `RIKUGAN_SWEEP_NOTIFY_WARNING` | `rikugan serve`: notify every sweep warning (`true`)       | No (defaults to off: only persistent warnings) |
 | `RIKUGAN_SWEEP_WARNING_PERSISTENCE` | `rikugan serve`: consecutive investigate sweeps before a warning is sent | No (defaults to `3`) |
 | `RIKUGAN_NOTIFY_ON_OK`      | `rikugan serve`: also notify OK verdicts (`true`)             | No (defaults to off) |
+| `RIKUGAN_AGENT_MCP_LISTEN`  | `rikugan serve`: address of the agent MCP server (in progress) | No (off when unset) |
+| `RIKUGAN_AGENT_MCP_TOKEN`   | Bearer token of the agent MCP server, 32 characters or more, distinct from `RIKUGAN_SERVE_TOKEN` | With `RIKUGAN_AGENT_MCP_LISTEN` |
+| `RIKUGAN_ESCALATION_LOGS`   | `off` keeps the log tools from the agent MCP server           | No (defaults to `on`) |
 | `RIKUGAN_READ_ONLY`         | `true` registers only the tools that read (today, every tool but `restart_service`), whatever the backends' credentials allow. Any value other than `true` or `false` refuses to start | No (defaults to `false`) |
 | `RIKUGAN_LOG_LEVEL`         | Log verbosity: `debug` / `info` / `warn` / `error`            | No (defaults to `info`) |
 

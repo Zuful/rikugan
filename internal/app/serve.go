@@ -45,14 +45,19 @@ const serviceAccountNamespace = "/var/run/secrets/kubernetes.io/serviceaccount/n
 //
 // The orchestration backend (ORCHESTRATION_PROVIDER: kubernetes or
 // dockercompose) also detects the rollouts; a metrics backend is
-// required.
-func Serve(ctx context.Context, logger, verdicts *slog.Logger) error {
+// required. With RIKUGAN_AGENT_MCP_LISTEN, it also serves the agent MCP
+// server (see SetupAgent).
+func Serve(ctx context.Context, logger, verdicts *slog.Logger, version string) error {
 	listen := os.Getenv("RIKUGAN_SERVE_LISTEN")
 	if listen == "" {
 		listen = DefaultServeListen
 	}
 	token := os.Getenv("RIKUGAN_SERVE_TOKEN")
 	if err := watch.CheckListen(listen, token); err != nil {
+		return err
+	}
+	agentCfg, err := agentMCPConfig(token)
+	if err != nil {
 		return err
 	}
 
@@ -132,35 +137,67 @@ func Serve(ctx context.Context, logger, verdicts *slog.Logger) error {
 		slog.Bool("token", token != ""),
 		slog.Bool("heartbeat", daemon.Heartbeat != nil),
 	)
-	return runWithAPI(ctx, daemon, &http.Server{
+	servers := []namedServer{{"verdicts API", &http.Server{
 		Addr:              listen,
 		Handler:           watch.NewAPI(j, token, nil),
 		ReadHeaderTimeout: 10 * time.Second,
-	})
+	}}}
+	if agentCfg != nil {
+		agent, err := SetupAgent(*agentCfg, logger, version)
+		if err != nil {
+			return fmt.Errorf("agent MCP server: %w", err)
+		}
+		logger.Info("agent MCP server",
+			slog.String("listen", agentCfg.Listen),
+			slog.String("path", AgentMCPPath),
+			slog.Bool("logs", agentCfg.Logs),
+		)
+		servers = append(servers, namedServer{"agent MCP server", &http.Server{
+			Addr:              agentCfg.Listen,
+			Handler:           AgentHandler(agent, agentCfg.Token),
+			ReadHeaderTimeout: 10 * time.Second,
+		}})
+	}
+	return runWithAPI(ctx, daemon, servers...)
 }
 
-// runWithAPI runs the daemon and the verdicts API together: either one
-// stopping stops the other.
-func runWithAPI(ctx context.Context, daemon *watch.Daemon, srv *http.Server) error {
+type namedServer struct {
+	name string
+	srv  *http.Server
+}
+
+// runWithAPI runs the daemon and its HTTP servers together: any one
+// stopping stops the others.
+func runWithAPI(ctx context.Context, daemon *watch.Daemon, servers ...namedServer) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	apiErr := make(chan error, 1)
-	go func() {
-		err := srv.ListenAndServe()
-		if errors.Is(err, http.ErrServerClosed) {
-			err = nil
-		} else if err != nil {
-			err = fmt.Errorf("verdicts API: %w", err)
-		}
-		apiErr <- err
-		cancel()
-	}()
+	apiErr := make(chan error, len(servers))
+	for _, s := range servers {
+		go func() {
+			err := s.srv.ListenAndServe()
+			if errors.Is(err, http.ErrServerClosed) {
+				err = nil
+			} else if err != nil {
+				err = fmt.Errorf("%s: %w", s.name, err)
+			}
+			apiErr <- err
+			cancel()
+		}()
+	}
 	err := daemon.Run(ctx)
 	shutdownCtx, done := context.WithTimeout(context.Background(), 5*time.Second)
 	defer done()
-	_ = srv.Shutdown(shutdownCtx)
-	if aerr := <-apiErr; aerr != nil {
-		return aerr
+	for _, s := range servers {
+		_ = s.srv.Shutdown(shutdownCtx)
+	}
+	var first error
+	for range servers {
+		if aerr := <-apiErr; aerr != nil && first == nil {
+			first = aerr
+		}
+	}
+	if first != nil {
+		return first
 	}
 	return err
 }

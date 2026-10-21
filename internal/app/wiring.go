@@ -56,52 +56,60 @@ func Setup(logger *slog.Logger, version string) (*server.MCPServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build k8s client: %w", err)
 	}
-	orch, err := registerOrchestrationConcept(d, k8sClient, logger)
-	if err != nil {
+	if err := registerAll(d, k8sClient, logger); err != nil {
 		return nil, err
 	}
-	if err := d.Register(imageprovenance.NewFromClient(k8sClient, imageprovenance.WithLogger(logger))); err != nil {
-		return nil, fmt.Errorf("register image provenance provider: %w", err)
+	return mcpSrv, nil
+}
+
+// registerAll registers every provider the unified binary carries.
+// With a nil k8sClient (Docker Compose orchestration), the tools that
+// need the cluster (image provenance, runes) are left out.
+func registerAll(d *dispatcher.Dispatcher, k8sClient kubernetes.Interface, logger *slog.Logger) error {
+	orch, err := registerOrchestrationConcept(d, k8sClient, logger)
+	if err != nil {
+		return err
+	}
+	if k8sClient != nil {
+		if err := d.Register(imageprovenance.NewFromClient(k8sClient, imageprovenance.WithLogger(logger))); err != nil {
+			return fmt.Errorf("register image provenance provider: %w", err)
+		}
 	}
 
 	// ── Optional providers without a concept interface yet: warn-and-skip. ─
 	for _, opt := range optionalProviders(logger) {
 		if err := registerOptional(d, logger, opt.name, opt.setup); err != nil {
-			return nil, err
+			return err
 		}
 	}
 
 	// ── Concept providers: each helper warn-and-skips when its backend
 	//    config is missing, so the unified binary degrades gracefully.
 	if err := registerLogsConcept(d, logger); err != nil {
-		return nil, err
+		return err
 	}
 	if err := registerAlertsConcept(d, logger); err != nil {
-		return nil, err
+		return err
 	}
 	promAPI, metricsProvider, err := registerMetricsConcept(d, logger)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	// ── Runes (correlation): six_eyes needs both k8s and prometheus.
 	//    Lives only in the unified binary; no per-concept correlation
 	//    binary in étape 4 since runes is a consumer that crosses
 	//    concept boundaries by design.
-	if promAPI != nil {
+	if promAPI != nil && k8sClient != nil {
 		if err := d.Register(runes.New(k8sClient, promAPI, runes.WithLogger(logger))); err != nil {
-			return nil, fmt.Errorf("register runes provider: %w", err)
+			return fmt.Errorf("register runes provider: %w", err)
 		}
 	}
 
 	// ── Deploy health (correlation): check_deploy_health reads the
 	//    deployments, orchestration and metrics concepts; the
 	//    DeploymentSource follows the orchestration backend.
-	if err := registerDeployHealth(d, k8sClient, orch, metricsProvider, logger); err != nil {
-		return nil, err
-	}
-
-	return mcpSrv, nil
+	return registerDeployHealth(d, k8sClient, orch, metricsProvider, logger)
 }
 
 // newDispatcher builds the dispatcher every Setup registers through,
