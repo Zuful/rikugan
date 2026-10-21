@@ -17,6 +17,7 @@ type Dispatcher struct {
 	providers []provider.Provider
 	logger    *slog.Logger
 	readOnly  bool
+	withheld  map[string]bool
 }
 
 // Option configures a Dispatcher.
@@ -27,6 +28,18 @@ type Option func(*Dispatcher)
 // allow.
 func WithReadOnly(on bool) Option {
 	return func(d *Dispatcher) { d.readOnly = on }
+}
+
+// WithoutTools withholds the named tools, whatever their class.
+func WithoutTools(names ...string) Option {
+	return func(d *Dispatcher) {
+		if d.withheld == nil {
+			d.withheld = map[string]bool{}
+		}
+		for _, n := range names {
+			d.withheld[n] = true
+		}
+	}
 }
 
 // New creates a Dispatcher bound to the given MCP server.
@@ -65,6 +78,13 @@ func (d *Dispatcher) Register(p provider.Provider) error {
 				slog.String("provider", p.Name()),
 				slog.String("tool", td.Tool.Name),
 			)
+		}
+		if d.withheld[td.Tool.Name] {
+			d.logger.Info("tool withheld by configuration",
+				slog.String("provider", p.Name()),
+				slog.String("tool", td.Tool.Name),
+			)
+			continue
 		}
 		if d.readOnly && access != Read {
 			d.logger.Info("tool withheld: read-only mode",

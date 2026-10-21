@@ -61,9 +61,37 @@ func TestRunWithAPIStopsWhenTheAPICannotListen(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	daemon := &watch.Daemon{Source: idleSource{}, Journal: j}
-	err = runWithAPI(ctx, daemon, &http.Server{Addr: busy.Addr().String(), ReadHeaderTimeout: time.Second})
+	err = runWithAPI(ctx, daemon, namedServer{"verdicts API", &http.Server{Addr: busy.Addr().String(), ReadHeaderTimeout: time.Second}})
 	if err == nil || !strings.Contains(err.Error(), "verdicts API") {
 		t.Errorf("got %v, want the listen error", err)
+	}
+	if ctx.Err() != nil {
+		t.Error("runWithAPI waited for the context instead of stopping")
+	}
+}
+
+// The agent MCP server failing to listen stops the daemon too, and the
+// error names it.
+func TestRunWithAPIStopsWhenTheAgentServerCannotListen(t *testing.T) {
+	busy, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = busy.Close() }()
+
+	j, err := journal.Open(t.TempDir(), journal.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = j.Close() }()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	daemon := &watch.Daemon{Source: idleSource{}, Journal: j}
+	err = runWithAPI(ctx, daemon,
+		namedServer{"verdicts API", &http.Server{Addr: "127.0.0.1:0", ReadHeaderTimeout: time.Second}},
+		namedServer{"agent MCP server", &http.Server{Addr: busy.Addr().String(), ReadHeaderTimeout: time.Second}})
+	if err == nil || !strings.Contains(err.Error(), "agent MCP server") {
+		t.Errorf("got %v, want the agent server's listen error", err)
 	}
 	if ctx.Err() != nil {
 		t.Error("runWithAPI waited for the context instead of stopping")

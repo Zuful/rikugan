@@ -92,7 +92,7 @@ func serve(logger *slog.Logger) error {
 	defer cancel()
 	verdicts := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	logger.Info("rikugan serve", slog.String("version", version))
-	return app.Serve(ctx, logger, verdicts)
+	return app.Serve(ctx, logger, verdicts, version)
 }
 
 // doctor checks rikugan serve's configuration and returns the exit
