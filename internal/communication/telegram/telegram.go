@@ -139,6 +139,11 @@ func (p *Provider) PostMessage(ctx context.Context, msg provider.TeamMessage) (p
 	return ref, nil
 }
 
+// Render formats msg as Telegram HTML: a severity marker and the bold
+// title, the body, then one line per link. Text is escaped, and links
+// that are not http(s) are shown as text rather than sent as anchors
+// Telegram would reject. A reply that cannot thread starts with a
+// quote of the message it answers.
 func Render(msg provider.TeamMessage) string {
 	var b strings.Builder
 	if msg.ReplyTo != nil && msg.ReplyTo.Ref == "" {

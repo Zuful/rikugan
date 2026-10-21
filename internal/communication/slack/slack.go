@@ -80,6 +80,8 @@ func withLogger(logger *slog.Logger) *slog.Logger {
 	return logger.With(slog.String("provider", "communication/slack"))
 }
 
+// newRest returns the webhook client: secret URL, and a hint for each
+// status that means the webhook itself is no longer valid.
 func newRest(opts ...restclient.Option) *restclient.Client {
 	opts = append([]restclient.Option{
 		restclient.WithSecretURL(),
@@ -93,6 +95,7 @@ func newRest(opts ...restclient.Option) *restclient.Client {
 	return restclient.New("slack", opts...)
 }
 
+// newBotRest returns the Web API client, authenticated by the bot token.
 func newBotRest(token string, opts ...restclient.Option) *restclient.Client {
 	return restclient.New("slack", append([]restclient.Option{
 		restclient.WithHeader("Authorization", "Bearer "+token),
@@ -118,8 +121,8 @@ func FromEnv(logger *slog.Logger) (*Provider, error) {
 // Name implements provider.Provider.
 func (p *Provider) Name() string { return "communication/slack" }
 
-// Tools implements provider.Provider: the communication concept has no
-// MCP tools.
+// Tools implements provider.Provider. Messages leave from the daemon, not
+// from an agent, so the backend exposes no MCP tool.
 func (p *Provider) Tools() []provider.ToolDefinition { return nil }
 
 type postMessageRequest struct {
