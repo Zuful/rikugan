@@ -5,6 +5,7 @@ package dispatcher
 import (
 	"log/slog"
 
+	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
 	"github.com/Zuful/rikugan/pkg/provider"
@@ -15,14 +16,29 @@ type Dispatcher struct {
 	server    *server.MCPServer
 	providers []provider.Provider
 	logger    *slog.Logger
+	readOnly  bool
+}
+
+// Option configures a Dispatcher.
+type Option func(*Dispatcher)
+
+// WithReadOnly withholds every tool not classified Read: the server
+// then cannot change anything, whatever its backends' credentials
+// allow.
+func WithReadOnly(on bool) Option {
+	return func(d *Dispatcher) { d.readOnly = on }
 }
 
 // New creates a Dispatcher bound to the given MCP server.
-func New(srv *server.MCPServer, logger *slog.Logger) *Dispatcher {
-	return &Dispatcher{
+func New(srv *server.MCPServer, logger *slog.Logger, opts ...Option) *Dispatcher {
+	d := &Dispatcher{
 		server: srv,
 		logger: logger,
 	}
+	for _, o := range opts {
+		o(d)
+	}
+	return d
 }
 
 // Register adds a provider and registers all of its tools on the MCP
@@ -35,10 +51,30 @@ func New(srv *server.MCPServer, logger *slog.Logger) *Dispatcher {
 // registered purely so it appears in Providers() and gets a startup
 // log line. Previously rejecting them was a latent bug that blocked
 // Docker Compose runtime wiring.
+//
+// Each tool's MCP annotations follow its classification (see
+// toolAccess). In read-only mode, a tool not classified Read is not
+// registered.
 func (d *Dispatcher) Register(p provider.Provider) error {
 	tools := p.Tools()
 
 	for _, td := range tools {
+		access, known := AccessOf(td.Tool.Name)
+		if !known {
+			d.logger.Warn("tool not classified as read or write: treated as write",
+				slog.String("provider", p.Name()),
+				slog.String("tool", td.Tool.Name),
+			)
+		}
+		if d.readOnly && access != Read {
+			d.logger.Info("tool withheld: read-only mode",
+				slog.String("provider", p.Name()),
+				slog.String("tool", td.Tool.Name),
+			)
+			continue
+		}
+		td.Tool.Annotations.ReadOnlyHint = mcp.ToBoolPtr(access == Read)
+		td.Tool.Annotations.DestructiveHint = mcp.ToBoolPtr(access != Read)
 		d.server.AddTool(td.Tool, td.Handler)
 		d.logger.Info("registered tool",
 			slog.String("provider", p.Name()),
