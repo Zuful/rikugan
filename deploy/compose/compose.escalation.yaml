@@ -40,7 +40,7 @@ services:
     image: ghcr.io/anomalyco/opencode:1.19.3
     container_name: rikugan-opencode
     restart: unless-stopped
-    command: ["serve", "--pure", "--hostname", "0.0.0.0", "--port", "4096"]
+    command: ["serve", "--pure", "--hostname", "0.0.0.0", "--port", "4096", "--print-logs", "--log-level", "WARN"]
     user: "65532:65532"
     read_only: true
     working_dir: /work

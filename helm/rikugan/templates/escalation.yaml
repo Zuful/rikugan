@@ -87,7 +87,8 @@ spec:
         - name: opencode
           image: "{{ $esc.opencode.image.repository }}:{{ $esc.opencode.image.tag }}"
           imagePullPolicy: {{ $esc.opencode.image.pullPolicy }}
-          args: ["serve", "--pure", "--hostname", "0.0.0.0", "--port", "4096"]
+          # Its logs go to stderr, where kubectl logs reads them.
+          args: ["serve", "--pure", "--hostname", "0.0.0.0", "--port", "4096", "--print-logs", "--log-level", "WARN"]
           workingDir: /work
           ports:
             - name: http

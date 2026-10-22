@@ -103,6 +103,8 @@ get() {
     sleep 2
   done
   echo "GET $1: HTTP $code: $(head -c 500 "$work_dir/body" 2>/dev/null)" >&2
+  echo "--- opencode logs" >&2
+  kubectl -n "$ns" logs "deployment/${release}-rikugan-opencode" --tail=120 >&2 || true
   return 1
 }
 work_dir=$(mktemp -d)
