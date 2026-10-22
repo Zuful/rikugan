@@ -9,8 +9,8 @@ set -euo pipefail
 
 lab=$(cd "$(dirname "$0")/../deploy/lab" && pwd)
 cd "$lab"
-if [ -e .env ] || [ -e state ] || [ -e export ]; then
-  echo "deploy/lab already has a .env, state/ or export/: not touching it" >&2
+if [ -e .env ] || [ -e state ] || [ -e export ] || [ -e escalation.env ]; then
+  echo "deploy/lab already has a .env, escalation.env, state/ or export/: not touching it" >&2
   exit 1
 fi
 cp .env.example .env
@@ -18,13 +18,16 @@ cat >>.env <<'EOF'
 LAB_PROMETHEUS_PORT=19090
 LAB_RIKUGAN_PORT=18081
 RIKUGAN_SERVE_TOKEN=lab-smoke-token
+LAB_ESCALATION=on
+TELEGRAM_BOT_TOKEN=lab-smoke
+TELEGRAM_CHAT_ID=1
 EOF
 prom=http://127.0.0.1:19090
 
 cleanup() {
   docker compose -f compose.shop.yaml down -v -t 0 >/dev/null 2>&1 || true
-  docker compose -f compose.yaml down -v -t 0 >/dev/null 2>&1 || true
-  rm -rf .env state export
+  docker compose -f compose.yaml -f compose.escalation.yaml down -v -t 0 >/dev/null 2>&1 || true
+  rm -rf .env escalation.env state export
 }
 diagnose() {
   echo "--- prometheus: history series, TSDB status, volume" >&2
@@ -35,7 +38,7 @@ diagnose() {
   docker run --rm -v rikugan-lab_prometheus-data:/prometheus alpine:3.20 ls -la /prometheus >&2 || true
   echo "--- containers" >&2
   docker ps -a >&2 || true
-  for c in rikugan-lab-serve rikugan-lab-loadgen rikugan-lab-prometheus; do
+  for c in rikugan-lab-serve rikugan-lab-loadgen rikugan-lab-prometheus rikugan-lab-opencode; do
     echo "--- $c" >&2
     docker logs --tail 50 "$c" >&2 || true
   done
@@ -84,6 +87,24 @@ wait_for 60 "the worker's jobs" \
 wait_for 30 "memory per replica (the lab's memory template)" \
   positive 'avg(process_resident_memory_bytes{namespace="lab-shop",service="web"})'
 wait_for 60 "rikugan sees web's rollout" more_rollouts web 0
+
+# The agent (LAB_ESCALATION=on, no model behind it here): OpenCode up,
+# its password required, rikugan's agent MCP server connected with the
+# token lab.sh generated.
+password=$(sed -n 's/^OPENCODE_SERVER_PASSWORD=//p' escalation.env)
+[ "${#password}" -eq 64 ] || { echo "lab.sh wrote no OpenCode password" >&2; exit 1; }
+opencode() { # path [password]
+  docker exec rikugan-lab-opencode wget -qO- -T 10 \
+    --header "Authorization: Basic $(printf 'opencode:%s' "${2:-$password}" | base64 | tr -d '\n')" \
+    "http://127.0.0.1:4096$1" 2>/dev/null
+}
+wait_for 120 "OpenCode answers" opencode /config >/dev/null
+if opencode /config not-the-password >/dev/null; then
+  echo "OpenCode answered with a wrong password" >&2
+  exit 1
+fi
+connected() { opencode /mcp | grep -q '"rikugan":{"status":"connected"}'; }
+wait_for 60 "OpenCode connected to rikugan's agent MCP server" connected
 [ "$(rollouts api)" -ge 1 ] || { echo "rikugan does not see api's rollout" >&2; exit 1; }
 
 # A new revision: a rollout for rikugan, 5xx for Prometheus.

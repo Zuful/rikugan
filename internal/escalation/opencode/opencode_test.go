@@ -20,10 +20,16 @@ type fakeServer struct {
 	toolIDs   any
 	mcp       map[string]any
 	busyPolls int // status polls answered busy before idle
-	messages  any
+	// mcpStatus is rikugan's MCP status until a connect, connectTo after
+	// it; empty: connected.
+	mcpStatus, connectTo string
+	connects             int
+	messages             any
+	// reminded replaces messages once a second prompt comes.
+	reminded any
 	// seen
 	session map[string]any
-	prompt  map[string]any
+	prompts []map[string]any
 	aborted bool
 	polls   int
 }
@@ -50,11 +56,26 @@ func (f *fakeServer) handler(t *testing.T) http.Handler {
 			_ = json.NewEncoder(w).Encode(f.toolIDs)
 		case r.URL.Path == "/config":
 			_ = json.NewEncoder(w).Encode(map[string]any{"mcp": f.mcp})
+		case r.URL.Path == "/mcp":
+			st := f.mcpStatus
+			if f.connects > 0 {
+				st = f.connectTo
+			}
+			if st == "" {
+				st = "connected"
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"rikugan": map[string]string{"status": st, "error": "SSE error: Unable to connect"}})
+		case r.Method == http.MethodPost && r.URL.Path == "/mcp/rikugan/connect":
+			f.connects++
+			_, _ = w.Write([]byte(`true`))
 		case r.Method == http.MethodPost && r.URL.Path == "/session":
 			f.session = decode()
 			_, _ = w.Write([]byte(`{"id":"ses_1"}`))
 		case r.URL.Path == "/session/ses_1/prompt_async":
-			f.prompt = decode()
+			f.prompts = append(f.prompts, decode())
+			if len(f.prompts) > 1 && f.reminded != nil {
+				f.messages = f.reminded
+			}
 			w.WriteHeader(http.StatusNoContent)
 		case r.URL.Path == "/session/status":
 			f.polls++
@@ -129,6 +150,21 @@ func TestPreflight(t *testing.T) {
 	}
 }
 
+// OpenCode does not retry a failed MCP connection: Preflight asks for
+// one, and blocks when it does not come.
+func TestPreflightReconnects(t *testing.T) {
+	ok := map[string]any{"rikugan": map[string]any{"type": "remote"}}
+	f := &fakeServer{toolIDs: natives, mcp: ok, mcpStatus: "failed", connectTo: "connected"}
+	if _, err := client(t, f).Preflight(context.Background()); err != nil || f.connects != 1 {
+		t.Errorf("err %v after %d connects, want nil after 1", err, f.connects)
+	}
+	f = &fakeServer{toolIDs: natives, mcp: ok, mcpStatus: "failed", connectTo: "failed"}
+	_, err := client(t, f).Preflight(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "not connected to OpenCode (failed: SSE error") {
+		t.Errorf("err = %v", err)
+	}
+}
+
 func TestWrongPassword(t *testing.T) {
 	srv := httptest.NewServer((&fakeServer{}).handler(t))
 	defer srv.Close()
@@ -140,18 +176,23 @@ func TestWrongPassword(t *testing.T) {
 
 const messages = `[
  {"info":{"role":"user"},"parts":[{"type":"text","text":"investigate"}]},
- {"info":{"role":"assistant","structured":null},"parts":[
+ {"info":{"role":"assistant"},"parts":[
+   {"type":"text","text":"Reading the logs first."},
    {"type":"tool","tool":"rikugan_get_logs","state":{"status":"completed","output":"panic: nil map write"}},
    {"type":"tool","tool":"rikugan_get_metric","state":{"status":"error","error":"metrics backend down"}},
    {"type":"step-finish","tokens":{"input":1000,"output":200,"reasoning":0,"cache":{"read":0,"write":0}},"cost":0.01}]},
- {"info":{"role":"assistant","structured":{"cause":"nil map","confidence":"high"}},"parts":[
+ {"info":{"role":"assistant"},"parts":[
    {"type":"tool","tool":"bash","state":{"status":"completed","output":"root"}},
+   {"type":"reasoning","text":"{not the answer}"},
+   {"type":"text","text":"Here it is:\n\u0060\u0060\u0060json\n{\"cause\":\"nil map\",\"confidence\":\"high\"}\n\u0060\u0060\u0060"},
    {"type":"step-finish","tokens":{"input":2000,"output":300,"reasoning":100,"cache":{"read":0,"write":0}},"cost":0.02}]}
 ]`
 
 func TestRun(t *testing.T) {
 	f := &fakeServer{busyPolls: 2}
-	_ = json.Unmarshal([]byte(messages), &f.messages)
+	if err := json.Unmarshal([]byte(messages), &f.messages); err != nil {
+		t.Fatal(err)
+	}
 	c := client(t, f)
 	res, err := c.Run(context.Background(), Request{
 		Title: "prod/api critical", System: "sys", Prompt: "investigate",
@@ -178,15 +219,68 @@ func TestRun(t *testing.T) {
 	}
 
 	// What the server was asked: deny all but rikugan's tools, natives
-	// off, the answer's schema.
+	// off, the answer's schema in the prompt, no structured output (it
+	// breaks the session's listing in 1.19.3). A native call is not
+	// reminded of anything: its result is discarded.
 	perm, _ := json.Marshal(f.session["permission"])
 	if string(perm) != `[{"action":"deny","pattern":"*","permission":"*"},{"action":"allow","pattern":"*","permission":"rikugan_*"}]` {
 		t.Errorf("session permission %s", perm)
 	}
-	tools, _ := json.Marshal(f.prompt["tools"])
-	format, _ := json.Marshal(f.prompt["format"])
-	if string(tools) != `{"bash":false,"read":false}` || !strings.Contains(string(format), `"type":"json_schema"`) {
-		t.Errorf("prompt tools %s format %s", tools, format)
+	if len(f.prompts) != 1 {
+		t.Fatalf("%d prompts, want 1", len(f.prompts))
+	}
+	tools, _ := json.Marshal(f.prompts[0]["tools"])
+	parts, _ := json.Marshal(f.prompts[0]["parts"])
+	if _, ok := f.prompts[0]["format"]; ok || string(tools) != `{"bash":false,"read":false}` ||
+		!strings.Contains(string(parts), `investigate`) || !strings.Contains(string(parts), `JSON Schema:\n{\"type\":\"object\"}`) {
+		t.Errorf("prompt %v", f.prompts[0])
+	}
+}
+
+func TestAnswer(t *testing.T) {
+	for _, tc := range []struct{ text, want, problem string }{
+		{`{"cause":"x"}`, `{"cause":"x"}`, ""},
+		{"```json\n{\"cause\":\"x\"}\n```", `{"cause":"x"}`, ""},
+		{`The answer: {"a":{"b":1}} done.`, `{"a":{"b":1}}`, ""},
+		{"", "", "no text"},
+		{"I could not find the cause.", "", "no JSON object"},
+		{`{"cause": "x",}`, "", "invalid JSON"},
+		{`{"a":1} and {"b":2}`, "", "invalid JSON"},
+	} {
+		got, problem := answer(tc.text)
+		if string(got) != tc.want || !strings.HasPrefix(problem, tc.problem) || (tc.problem == "") != (problem == "") {
+			t.Errorf("answer(%q) = %s, %q; want %s, %q", tc.text, got, problem, tc.want, tc.problem)
+		}
+	}
+}
+
+// An agent that ends without the JSON answer is reminded once, in the
+// same session.
+func TestRunRemindsOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		reminded string
+		answer   string
+		prompts  int
+	}{
+		{"answers then", `[{"info":{"role":"assistant"},"parts":[{"type":"text","text":"{\"cause\":\"x\"}"}]}]`, `{"cause":"x"}`, 2},
+		{"never answers", `[{"info":{"role":"assistant"},"parts":[{"type":"text","text":"Still no idea."}]}]`, "", 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeServer{}
+			_ = json.Unmarshal([]byte(`[{"info":{"role":"assistant"},"parts":[{"type":"text","text":"The cause is a nil map."}]}]`), &f.messages)
+			_ = json.Unmarshal([]byte(tc.reminded), &f.reminded)
+			res, err := client(t, f).Run(context.Background(), Request{Timeout: time.Minute})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(res.Answer) != tc.answer || len(f.prompts) != tc.prompts {
+				t.Errorf("answer %s after %d prompts, want %s after %d", res.Answer, len(f.prompts), tc.answer, tc.prompts)
+			}
+			if text, _ := json.Marshal(f.prompts[1]["parts"]); !strings.Contains(string(text), "no JSON object") {
+				t.Errorf("reminder %s does not say what is wrong", text)
+			}
+		})
 	}
 }
 

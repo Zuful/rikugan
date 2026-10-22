@@ -1,0 +1,71 @@
+# The lab with escalation: each delivered critical is investigated by an
+# OpenCode agent on a local model (Ollama on the host), with rikugan's
+# read-only tools alone. ./lab.sh adds this file when .env has
+# LAB_ESCALATION=on, and writes escalation.env (the agent MCP token and
+# the OpenCode server password) on the first up.
+#
+# opencode.json is deploy/compose's config, rikugan's MCP server alone
+# and every native tool off, plus the Ollama provider
+# (test/opencode-config-sync.sh keeps them in sync). Ollama must listen
+# with a context of 32k tokens or more: see README.md.
+services:
+  rikugan-serve:
+    environment:
+      RIKUGAN_AGENT_MCP_LISTEN: 0.0.0.0:8081
+      RIKUGAN_ESCALATION: "on"
+      RIKUGAN_ESCALATION_LOGS: ${RIKUGAN_ESCALATION_LOGS:-on}
+      RIKUGAN_ESCALATION_PER_HOUR: ${RIKUGAN_ESCALATION_PER_HOUR:-4}
+      RIKUGAN_ESCALATION_TIMEOUT: ${RIKUGAN_ESCALATION_TIMEOUT:-15m}
+      RIKUGAN_ESCALATION_MONTHLY_BUDGET: ${RIKUGAN_ESCALATION_MONTHLY_BUDGET:-1000}
+      OPENCODE_URL: http://opencode:4096
+    env_file:
+      - path: escalation.env
+        required: true
+    networks: [lab, agent]
+
+  opencode:
+    image: ghcr.io/anomalyco/opencode:1.19.3
+    container_name: rikugan-lab-opencode
+    restart: unless-stopped
+    depends_on: [rikugan-serve]
+    # OpenCode writes into its config directory as it loads it: the
+    # config is copied into a writable tmpfs first.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - mkdir -p "$$XDG_CONFIG_HOME/opencode" && cp /etc/opencode-config/opencode.json "$$XDG_CONFIG_HOME/opencode/" &&
+        exec opencode serve --pure --hostname 0.0.0.0 --port 4096 --print-logs --log-level WARN
+    user: "65532:65532"
+    read_only: true
+    working_dir: /work
+    environment:
+      HOME: /home/opencode
+      XDG_CONFIG_HOME: /home/opencode/.config
+      XDG_DATA_HOME: /home/opencode/.local/share
+      XDG_CACHE_HOME: /home/opencode/.cache
+      XDG_STATE_HOME: /home/opencode/.local/state
+      LAB_OLLAMA_URL: ${LAB_OLLAMA_URL:-http://host.docker.internal:11434/v1}
+      LAB_OLLAMA_MODEL: ${LAB_OLLAMA_MODEL:-gemma4:12b-it-qat}
+    env_file:
+      - path: escalation.env
+        required: true
+      # ./lab.sh canary plants a fake secret here: the agent must never
+      # reach it, its tools being rikugan's alone.
+      - path: state/canary.env
+        required: false
+    volumes:
+      - ./opencode.json:/etc/opencode-config/opencode.json:ro
+    tmpfs:
+      - /home/opencode:uid=65532,gid=65532
+      - /work:uid=65532,gid=65532
+      - /tmp
+    # Docker Desktop resolves host.docker.internal by itself; this makes
+    # it resolve on a Linux host too.
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [agent]
+
+networks:
+  agent:
+    name: rikugan-lab-agent
