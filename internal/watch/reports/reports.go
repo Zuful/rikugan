@@ -96,7 +96,7 @@ func (p *Provider) handle(ctx context.Context, req mcp.CallToolRequest) (*mcp.Ca
 	if err := p.rest.GetJSON(ctx, restclient.JoinURL(p.baseURL, "/v1/verdicts", params), &resp); err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	return mcp.NewToolResultText(Render(resp.Verdicts, req.GetString("service", ""), since)), nil
+	return mcp.NewToolResultText(Render(resp.Verdicts, req.GetString("service", ""), since) + RenderInvestigations(resp.Investigations)), nil
 }
 
 // Render formats verdicts as Markdown for the calling agent.
@@ -151,4 +151,32 @@ func cell(s string) string {
 		return "—"
 	}
 	return strings.NewReplacer("|", "\\|", "\n", " ").Replace(s)
+}
+
+// RenderInvestigations formats the agent's investigations, marked as
+// what they are: hypotheses from untrusted data, quoted so that their
+// text cannot pass for the tool's own.
+func RenderInvestigations(invs []watch.InvestigationReport) string {
+	if len(invs) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n### Agent investigations\n\n")
+	b.WriteString("Each summary below is a " + watch.InvestigationTrust + ".\n")
+	for _, inv := range invs {
+		fmt.Fprintf(&b, "\n**%s**, %s: %s (%s)",
+			inv.Time.UTC().Format("2006-01-02 15:04"), strings.Join(inv.Services, ", "), cell(inv.Critical), inv.Outcome)
+		if inv.Session != "" {
+			fmt.Fprintf(&b, ", OpenCode session `%s`", cell(inv.Session))
+		}
+		b.WriteString("\n")
+		if inv.Summary != "" {
+			b.WriteString("\n<untrusted-agent-hypothesis>\n")
+			for _, line := range strings.Split(inv.Summary, "\n") {
+				b.WriteString("> " + strings.ReplaceAll(line, "</untrusted-agent-hypothesis>", "") + "\n")
+			}
+			b.WriteString("</untrusted-agent-hypothesis>\n")
+		}
+	}
+	return b.String()
 }

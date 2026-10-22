@@ -144,3 +144,35 @@ func TestVerdictsAPIToken(t *testing.T) {
 		t.Errorf("POST: %d", rec.Code)
 	}
 }
+
+// Ended investigations are listed apart from verdicts, as hypotheses;
+// those still running are not.
+func TestAPIListsInvestigations(t *testing.T) {
+	h, api := apiHarness(t, "")
+	inc := Incident{Key: "rollout/prod/api/4", Title: "prod/api: revision 4 degraded (+15m0s)",
+		Services: []provider.Service{{Name: "api", Namespace: "prod"}}}
+	for _, r := range []escalationRecord{
+		{Event: EscalationStarted, Incident: inc},
+		{Event: EscalationDone, Incident: inc, Session: "ses_1", Summary: "Probable cause: a nil map write."},
+		{Event: EscalationStarted, Incident: Incident{Key: "x", Services: []provider.Service{{Name: "web", Namespace: "shop"}}}},
+	} {
+		if err := h.d.recordEscalation(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, body := get(t, api, "/v1/verdicts?service=prod/api", "")
+	if len(body.Investigations) != 1 {
+		t.Fatalf("investigations %+v, want the ended one", body.Investigations)
+	}
+	inv := body.Investigations[0]
+	if inv.Outcome != EscalationDone || inv.Summary != "Probable cause: a nil map write." || inv.Session != "ses_1" ||
+		inv.Trust != InvestigationTrust || inv.Services[0] != "prod/api" {
+		t.Errorf("investigation %+v", inv)
+	}
+	if len(body.Verdicts) == 0 {
+		t.Error("verdicts gone")
+	}
+	if _, body := get(t, api, "/v1/verdicts?service=shop/web", ""); len(body.Investigations) != 0 {
+		t.Errorf("another service's investigation listed: %+v", body.Investigations)
+	}
+}
