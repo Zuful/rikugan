@@ -211,6 +211,7 @@ func (d *Daemon) sweepServices(ctx context.Context, services []provider.Service)
 
 	// As for rollouts: send first, so a crash repeats rather than loses.
 	undelivered := map[*sweepResult]bool{}
+	var incidents []Incident
 	if d.Notifier != nil {
 		var events []sweep.Event
 		byEvent := map[sweep.Event][]*sweepResult{}
@@ -242,6 +243,8 @@ func (d *Daemon) sweepServices(ctx context.Context, services []provider.Service)
 			if len(delivered) == 0 && len(d.Notifier.Channels) > 0 {
 				d.logger().Error("sweep: notification not delivered on any channel, retrying",
 					slog.String("title", msg.Title), slog.Int("services", len(group)))
+			} else if group[0].note.Severity == provider.SeverityCritical {
+				incidents = append(incidents, d.sweepIncident(group, msg, refs))
 			}
 		}
 	}
@@ -258,6 +261,13 @@ func (d *Daemon) sweepServices(ctx context.Context, services []provider.Service)
 		if d.Verdicts != nil {
 			d.Verdicts.Info("sweep", slog.String("service", serviceKey(r.svc)), slog.String("verdict", string(r.rep.Verdict)),
 				slog.String("phase", string(r.next.Phase)))
+		}
+	}
+	// Investigate once the sweep is recorded: a crash before then
+	// repeats the sweep, and its critical.
+	for _, inc := range incidents {
+		if err := d.escalate(ctx, inc); err != nil {
+			return err
 		}
 	}
 	return nil

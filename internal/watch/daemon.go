@@ -86,6 +86,9 @@ type Daemon struct {
 	// query templates are sent as a dry run, and the invalid ones are
 	// warned about like those a check meets.
 	ValidateTemplates func(context.Context) []TemplateCheck
+	// Escalation, when set, has an agent investigate each delivered
+	// critical and answer in its thread.
+	Escalation *Escalation
 
 	services  map[string]*serviceState
 	sweeps    map[string]*sweepServiceState
@@ -238,6 +241,13 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return err
 	}
 	d.validateTemplates(ctx)
+	var escalated <-chan escalationResult
+	if d.Escalation != nil {
+		if err := d.resumeEscalations(ctx); err != nil {
+			return err
+		}
+		escalated = d.Escalation.done
+	}
 	events, err := d.Source.WatchRollouts(ctx)
 	if err != nil {
 		return fmt.Errorf("watch rollouts: %w", err)
@@ -258,6 +268,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 			return nil
 		case <-beat:
 			go d.Heartbeat.ping(ctx)
+			continue
+		case res := <-escalated:
+			if err := d.finishEscalation(ctx, res); err != nil {
+				return err
+			}
 			continue
 		case r, ok := <-events:
 			if !ok {
@@ -296,8 +311,13 @@ func (d *Daemon) Replay() error {
 	d.lastSweep = time.Time{}
 	d.outages = map[string]*outage{}
 	d.invalidWarned = map[string]bool{}
+	if d.Escalation != nil {
+		d.Escalation.reset()
+	}
 	skipped, err := d.Journal.Replay(func(rec journal.Record) error {
 		switch rec.Kind {
+		case KindEscalation:
+			d.replayEscalation(rec.Time, rec.Data)
 		case KindOutage:
 			d.replayOutage(rec.Data)
 		case KindInvalidTemplate:
@@ -580,10 +600,12 @@ func (d *Daemon) check(ctx context.Context, rs *rolloutState, cp time.Duration, 
 	// the check and may send twice, rather than recording a check whose
 	// critical was never sent.
 	var note *notificationRecord
+	var body string
 	if d.Notifier != nil && report.Outcome == health.OutcomeEvaluated {
 		next, dec := decide(rs.notify, report.Verdict, d.Notifier.NotifyOnOK)
 		if dec != nil {
 			msg := d.Notifier.message(ctx, c, *dec)
+			body = msg.Body
 			delivered, refs := d.Notifier.Post(ctx, msg)
 			note = &notificationRecord{
 				Sequence: r.Label(), Checkpoint: cp.String(), Event: dec.Event, Severity: string(dec.Severity),
@@ -616,6 +638,11 @@ func (d *Daemon) check(ctx context.Context, rs *rolloutState, cp time.Duration, 
 			return err
 		}
 		rs.notify = note.State
+		if note.Severity == string(provider.SeverityCritical) {
+			if err := d.escalate(ctx, d.rolloutIncident(c, note, body, partial)); err != nil {
+				return err
+			}
+		}
 	}
 	if d.Verdicts != nil {
 		d.Verdicts.Info("check",
