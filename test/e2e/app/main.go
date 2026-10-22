@@ -202,7 +202,7 @@ func throttled(line string, interval time.Duration) func(now time.Time) {
 			return
 		}
 		last = now
-		log.Print(line)
+		log.Print(line) // #nosec G706 -- the lab injects this line on purpose (ERROR_LOG)
 	}
 }
 
