@@ -69,3 +69,24 @@ rikugan serve: resource names and the namespaces it watches.
 {{ include "rikugan.selectorLabels" . }}
 app.kubernetes.io/component: serve
 {{- end }}
+
+{{/*
+Escalation: the OpenCode server's names and labels, and the Secret it
+shares with rikugan serve.
+*/}}
+{{- define "rikugan.opencodeName" -}}
+{{- printf "%s-opencode" (include "rikugan.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{- define "rikugan.escalationSecretName" -}}
+{{- default (printf "%s-rikugan-escalation" .Release.Name) .Values.serve.escalation.existingSecret }}
+{{- end }}
+
+{{- define "rikugan.opencodeSelectorLabels" -}}
+{{ include "rikugan.selectorLabels" . }}
+app.kubernetes.io/component: opencode
+{{- end }}
+
+{{- define "rikugan.escalationOn" -}}
+{{- if and .Values.serve.enabled .Values.serve.escalation.enabled }}true{{ end }}
+{{- end }}

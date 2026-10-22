@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -220,5 +222,22 @@ func TestUnknownCost(t *testing.T) {
 	res, err := client(t, f).Run(context.Background(), Request{Timeout: time.Minute})
 	if err != nil || res.Cost >= 0 {
 		t.Errorf("cost %v err %v, want negative", res.Cost, err)
+	}
+}
+
+// The chart switches off the same native tools this client knows: a tool
+// added here must be off there too.
+func TestChartSwitchesOffEveryKnownNativeTool(t *testing.T) {
+	raw, err := os.ReadFile("../../../helm/rikugan/templates/escalation.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`\$natives := list ([^}]*)}}`).FindSubmatch(raw)
+	if m == nil {
+		t.Fatal("no $natives list in the chart's escalation template")
+	}
+	chart := strings.Fields(strings.ReplaceAll(string(m[1]), `"`, ""))
+	if strings.Join(chart, ",") != strings.Join(KnownNativeTools, ",") {
+		t.Errorf("chart natives %v\nclient knows %v", chart, KnownNativeTools)
 	}
 }

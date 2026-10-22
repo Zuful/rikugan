@@ -596,6 +596,22 @@ It runs as a **single instance**: a lock on the state directory makes a second o
   A cap reached, a timeout, a failure, or a restart during an investigation (never run again) each leave a line in the thread.
 - `RIKUGAN_ESCALATION_TEAMS` lists the teams an "escalate" suggestion may name.
 
+**Packaging the escalation.** OpenCode runs apart from rikugan serve, never as a sidecar: a sidecar would share the pod's network (the verdicts API on loopback) and often its ServiceAccount token.
+
+- **Helm.** Set `serve.escalation.enabled=true` with `serve.escalation.opencode.model` and the LLM provider's key (`serve.escalation.opencode.envFrom`). The chart then adds:
+  - an OpenCode Deployment with the pinned image, no ServiceAccount token, non-root, and a read-only file system;
+  - its generated config: rikugan's MCP server alone, every native tool off and denied;
+  - a Secret, generated once and kept, holding the OpenCode password and the agent MCP token. With GitOps, use `serve.escalation.existingSecret`;
+  - two NetworkPolicies:
+    - OpenCode answers rikugan serve alone. It reaches only DNS, the agent MCP port, and HTTPS outside private ranges, so it has no path into the cluster.
+    - The agent MCP port answers OpenCode alone.
+
+  A NetworkPolicy filters addresses, not domain names, so "the LLM provider alone" needs an egress proxy or an FQDN policy where the CNI has one (Cilium).
+- **Compose.** Add [`compose.escalation.yaml`](./deploy/compose/compose.escalation.yaml). Its isolation is narrower, and the file says how.
+- **Personal data.** Tool outputs, logs included, go to the LLM provider. Two ways keep them in:
+  - `serve.escalation.logs=false` (`RIKUGAN_ESCALATION_LOGS=off`) withholds the log tools;
+  - a self-hosted model (Ollama, vLLM) keeps everything inside. `serve.escalation.networkPolicy.llmEndpoint` opens the one exception to the private ranges it needs, as a CIDR or a pod and namespace selector, with its ports.
+
 **Notifications** go to every configured channel (Telegram, Slack; see `TELEGRAM_*` and `SLACK_*`): a degraded verdict or a failed rollout is `critical`, an investigate verdict a `warning`; OK verdicts are only sent with `RIKUGAN_NOTIFY_ON_OK=true`. Each rollout gets one notification, and a later checkpoint only notifies again when the verdict gets worse, with one exception: after a critical, the first checkpoint back below degraded sends a single "recovered" message (insufficient data never counts as recovered). When an alerts backend is configured, alerts already firing for the service are mentioned in the message.
 
 ### Docker

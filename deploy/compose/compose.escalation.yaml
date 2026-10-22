@@ -1,0 +1,74 @@
+# Escalation of each delivered critical to an agent (in progress): an
+# OpenCode server in a container of its own, whose only tools are
+# rikugan's, served read-only by rikugan serve on the agent MCP port.
+#
+#   docker compose -f compose.yaml -f compose.escalation.yaml up -d
+#
+# Copy escalation.env.example to escalation.env and fill in the agent
+# MCP token and the OpenCode server password (openssl rand -hex 32 each):
+# both containers read it. Put the provider's key in opencode.env (e.g.
+# OPENAI_API_KEY=…) and the model in opencode.json ("model":
+# "provider/model"). Keep both env files out of version control. opencode.json is
+# the chart's generated config: rikugan's MCP server alone, every native
+# tool off and denied; rikugan checks it before each investigation.
+#
+# Isolation on Compose is narrower than on Kubernetes: OpenCode shares a
+# network with rikugan serve alone, has no Docker socket, no backend
+# variable and a read-only file system, publishes no port, and the agent
+# MCP port is published nowhere. Compose cannot filter egress by
+# address: OpenCode can reach the internet (its LLM provider) and, through
+# the host's NAT, the local network. Use a firewall or an egress proxy
+# to narrow that. Tool outputs, logs included, are sent to the LLM
+# provider: RIKUGAN_ESCALATION_LOGS=off keeps the logs out, a
+# self-hosted model keeps everything in.
+services:
+  rikugan-serve:
+    environment:
+      RIKUGAN_AGENT_MCP_LISTEN: 0.0.0.0:8081
+      RIKUGAN_ESCALATION: "on"
+      RIKUGAN_ESCALATION_LOGS: ${RIKUGAN_ESCALATION_LOGS:-on}
+      RIKUGAN_ESCALATION_PER_HOUR: ${RIKUGAN_ESCALATION_PER_HOUR:-4}
+      RIKUGAN_ESCALATION_MONTHLY_BUDGET: ${RIKUGAN_ESCALATION_MONTHLY_BUDGET:-5}
+      RIKUGAN_ESCALATION_TEAMS: ${RIKUGAN_ESCALATION_TEAMS:-}
+      OPENCODE_URL: http://opencode:4096
+    env_file:
+      - path: escalation.env
+        required: true
+    networks: [default, agent]
+
+  opencode:
+    image: ghcr.io/anomalyco/opencode:1.19.3
+    container_name: rikugan-opencode
+    restart: unless-stopped
+    # OpenCode writes into its config directory as it loads it, so the
+    # generated config is copied into a writable tmpfs first.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - mkdir -p "$$XDG_CONFIG_HOME/opencode" && cp /etc/opencode-config/opencode.json "$$XDG_CONFIG_HOME/opencode/" &&
+        exec opencode serve --pure --hostname 0.0.0.0 --port 4096 --print-logs --log-level WARN
+    user: "65532:65532"
+    read_only: true
+    working_dir: /work
+    environment:
+      HOME: /home/opencode
+      XDG_CONFIG_HOME: /home/opencode/.config
+      XDG_DATA_HOME: /home/opencode/.local/share
+      XDG_CACHE_HOME: /home/opencode/.cache
+      XDG_STATE_HOME: /home/opencode/.local/state
+    env_file:
+      - path: escalation.env
+        required: true
+      - path: opencode.env
+        required: false
+    volumes:
+      - ./opencode.json:/etc/opencode-config/opencode.json:ro
+    tmpfs:
+      - /home/opencode:uid=65532,gid=65532
+      - /work:uid=65532,gid=65532
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [agent]
+
+networks:
+  agent:

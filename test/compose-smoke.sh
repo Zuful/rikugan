@@ -37,6 +37,10 @@ trap cleanup EXIT
 trap diagnose ERR
 
 docker build --target serve-compose -t rikugan:serve-compose "$root"
+# The escalation overlay is valid Compose (its secrets file filled in).
+cp "$root/deploy/compose/escalation.env.example" "$root/deploy/compose/escalation.env"
+docker compose -f "$file" -f "$root/deploy/compose/compose.escalation.yaml" config -q
+rm "$root/deploy/compose/escalation.env"
 docker compose -p "$WATCHED_PROJECT" -f "$work/demo.yaml" up -d
 docker compose -f "$file" up -d
 

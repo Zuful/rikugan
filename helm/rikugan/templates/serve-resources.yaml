@@ -54,6 +54,11 @@ spec:
     - name: api
       port: {{ .Values.serve.service.port }}
       targetPort: api
+    {{- if include "rikugan.escalationOn" . }}
+    - name: agent-mcp
+      port: {{ .Values.serve.escalation.mcpPort }}
+      targetPort: agent-mcp
+    {{- end }}
 ---
 apiVersion: v1
 kind: ServiceAccount
