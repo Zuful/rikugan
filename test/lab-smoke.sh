@@ -135,10 +135,14 @@ fi
 ./lab.sh verdicts >/dev/null
 ./lab.sh export
 tarball=$(ls export/*.tar.gz)
+# Read the archive once: grep -q stops at the first match, and tar
+# writing into the closed pipe then fails the step under pipefail.
+listing=$(tar -tzf "$tarball")
 for f in verdicts.json verdicts.csv actions.jsonl serve.log journal/verdicts.jsonl report.md notifications.csv; do
-  tar -tzf "$tarball" | grep -q "/$f\$" || { echo "export lacks $f" >&2; exit 1; }
+  grep -q "/$f\$" <<<"$listing" || { echo "export lacks $f" >&2; exit 1; }
 done
 grep -q '"action":"deploy","service":"api","scenario":"oom","severity":"degraded","signals":\["restarts","availability"\]' state/actions.jsonl
 grep -q '"action":"dependency-stop".*"services":\["web","api"\]' state/actions.jsonl
-tar -xzOf "$tarball" --wildcards '*/report.md' | grep -q '^## Criteria' || { echo "no criteria in the score" >&2; exit 1; }
+report=$(tar -xzOf "$tarball" --wildcards '*/report.md')
+grep -q '^## Criteria' <<<"$report" || { echo "no criteria in the score" >&2; exit 1; }
 echo "lab smoke test passed"
