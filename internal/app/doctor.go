@@ -257,14 +257,14 @@ func runDoctor(ctx context.Context, w io.Writer, opts DoctorOptions, deps doctor
 		c.fail("notifications", err.Error())
 	case len(channels) == 0:
 		c.warn("notifications", "no channel: verdicts are recorded but nobody is told",
-			"set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID, or SLACK_WEBHOOK_URL")
+			"set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID, or SLACK_BOT_TOKEN and SLACK_CHANNEL, or SLACK_WEBHOOK_URL")
 	}
 	for _, ch := range channels {
 		if !opts.SendTest {
 			c.ok("notifications", ch.Name()+" configured (not tried: --send-test sends a message)")
 			continue
 		}
-		err := ch.PostMessage(ctx, provider.TeamMessage{
+		_, err := ch.PostMessage(ctx, provider.TeamMessage{
 			Severity: provider.SeverityInfo,
 			Title:    "rikugan doctor: test message",
 			Body:     "If you read this, rikugan serve can reach this channel.",

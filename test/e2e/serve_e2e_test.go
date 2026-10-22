@@ -235,11 +235,11 @@ type inbox struct {
 
 func (i *inbox) Name() string { return "inbox" }
 
-func (i *inbox) PostMessage(_ context.Context, m provider.TeamMessage) error {
+func (i *inbox) PostMessage(_ context.Context, m provider.TeamMessage) (provider.MessageRef, error) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.msgs = append(i.msgs, m)
-	return nil
+	return "", nil
 }
 
 func (i *inbox) titles() []string {

@@ -304,6 +304,21 @@ type Link struct {
 	URL  string
 }
 
+// MessageRef identifies a posted message within its channel (a
+// Telegram message_id, a Slack ts), so that a later message can answer
+// it. Empty when the channel cannot say, as with a Slack incoming
+// webhook.
+type MessageRef string
+
+// Reply makes a team message an answer to an earlier one.
+type Reply struct {
+	// Ref is the earlier message in the channel the reply goes to. When
+	// empty, the channel cannot thread: the reply quotes Title instead.
+	Ref MessageRef
+	// Title is the earlier message's title.
+	Title string
+}
+
 // TeamMessage is a message for the humans of a team. Body is plain
 // text; each provider escapes and formats it for its own channel.
 type TeamMessage struct {
@@ -311,13 +326,18 @@ type TeamMessage struct {
 	Title    string
 	Body     string
 	Links    []Link
+	// ReplyTo, when set, answers an earlier message: in its thread
+	// where the channel can, quoting its title otherwise.
+	ReplyTo *Reply
 }
 
 // CommunicationProvider posts messages to a team channel (concept 7 in
 // docs/ontology.md). Its backends are telegram and slack.
 type CommunicationProvider interface {
 	Provider
-	PostMessage(ctx context.Context, msg TeamMessage) error
+	// PostMessage posts msg and returns its reference, empty when the
+	// channel gives none.
+	PostMessage(ctx context.Context, msg TeamMessage) (MessageRef, error)
 }
 
 // Tracing, Security, Versioning and Correlation concepts will get their

@@ -337,7 +337,7 @@ func serveNotifier(logger *slog.Logger) (*watch.Notifier, error) {
 	}
 	if len(channels) == 0 {
 		logger.Warn("no notification channel configured: verdicts are recorded but nobody is told",
-			slog.String("hint", "set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID, or SLACK_WEBHOOK_URL"))
+			slog.String("hint", "set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID, or SLACK_BOT_TOKEN and SLACK_CHANNEL, or SLACK_WEBHOOK_URL"))
 	}
 	n := &watch.Notifier{
 		Channels:   channels,

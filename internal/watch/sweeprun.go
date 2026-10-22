@@ -82,6 +82,9 @@ type sweepNotifRecord struct {
 	Severity  string      `json:"severity"`
 	Title     string      `json:"title"`
 	Delivered []string    `json:"delivered,omitempty"`
+	// Refs is each channel's reference to the message, shared by the
+	// services of a grouped message.
+	Refs map[string]provider.MessageRef `json:"refs,omitempty"`
 }
 
 // replaySweep restores a service's sweep state from its latest record.
@@ -228,9 +231,9 @@ func (d *Daemon) sweepServices(ctx context.Context, services []provider.Service)
 			} else {
 				msg = d.Notifier.sweepGroupMessage(ctx, group)
 			}
-			delivered := d.Notifier.Send(ctx, msg)
+			delivered, refs := d.Notifier.Post(ctx, msg)
 			for _, r := range group {
-				r.rec.Notified = &sweepNotifRecord{Event: r.note.Event, Severity: string(r.note.Severity), Title: msg.Title, Delivered: delivered}
+				r.rec.Notified = &sweepNotifRecord{Event: r.note.Event, Severity: string(r.note.Severity), Title: msg.Title, Delivered: delivered, Refs: refs}
 				if len(delivered) == 0 && len(d.Notifier.Channels) > 0 {
 					undelivered[r] = true
 					r.st.retryAt = d.now().Add(retryAfter)

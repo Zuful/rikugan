@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -88,39 +89,68 @@ type sendMessageRequest struct {
 	Text                  string `json:"text"`
 	ParseMode             string `json:"parse_mode"`
 	DisableWebPagePreview bool   `json:"disable_web_page_preview"`
+	// ReplyParameters threads a reply under an earlier message.
+	ReplyParameters *replyParameters `json:"reply_parameters,omitempty"`
+}
+
+type replyParameters struct {
+	MessageID int64 `json:"message_id"`
+	// AllowSendingWithoutReply still posts the reply when the earlier
+	// message was deleted.
+	AllowSendingWithoutReply bool `json:"allow_sending_without_reply"`
 }
 
 type sendMessageResponse struct {
 	OK          bool   `json:"ok"`
 	Description string `json:"description"`
+	Result      struct {
+		MessageID int64 `json:"message_id"`
+	} `json:"result"`
 }
 
 // PostMessage implements provider.CommunicationProvider.
-func (p *Provider) PostMessage(ctx context.Context, msg provider.TeamMessage) error {
+func (p *Provider) PostMessage(ctx context.Context, msg provider.TeamMessage) (provider.MessageRef, error) {
 	req := sendMessageRequest{
 		ChatID:                p.chatID,
 		Text:                  Render(msg),
 		ParseMode:             "HTML",
 		DisableWebPagePreview: true,
 	}
+	if msg.ReplyTo != nil && msg.ReplyTo.Ref != "" {
+		id, err := strconv.ParseInt(string(msg.ReplyTo.Ref), 10, 64)
+		if err != nil {
+			return "", fmt.Errorf("telegram: %q is not a message id", msg.ReplyTo.Ref)
+		}
+		req.ReplyParameters = &replyParameters{MessageID: id, AllowSendingWithoutReply: true}
+	}
 	var resp sendMessageResponse
 	endpoint := baseURL + "/bot" + url.PathEscape(p.token) + "/sendMessage"
 	if err := p.rest.PostJSON(ctx, endpoint, req, &resp); err != nil {
-		return err
+		return "", err
 	}
 	if !resp.OK {
-		return fmt.Errorf("telegram refused the message: %s", resp.Description)
+		return "", fmt.Errorf("telegram refused the message: %s", resp.Description)
 	}
 	p.logger.Debug("message posted", slog.String("severity", string(msg.Severity)))
-	return nil
+	var ref provider.MessageRef
+	if resp.Result.MessageID != 0 {
+		ref = provider.MessageRef(strconv.FormatInt(resp.Result.MessageID, 10))
+	}
+	return ref, nil
 }
 
 // Render formats msg as Telegram HTML: a severity marker and the bold
 // title, the body, then one line per link. Text is escaped, and links
 // that are not http(s) are shown as text rather than sent as anchors
-// Telegram would reject.
+// Telegram would reject. A reply that cannot thread starts with a
+// quote of the message it answers.
 func Render(msg provider.TeamMessage) string {
 	var b strings.Builder
+	if msg.ReplyTo != nil && msg.ReplyTo.Ref == "" {
+		b.WriteString("↪ Re: ")
+		b.WriteString(html.EscapeString(truncate(msg.ReplyTo.Title, maxTitle)))
+		b.WriteString("\n")
+	}
 	b.WriteString(marker(msg.Severity))
 	b.WriteString(" <b>")
 	b.WriteString(html.EscapeString(truncate(msg.Title, maxTitle)))

@@ -47,7 +47,8 @@ serve:
     storageClass: ""
     existingClaim: ""
   # Notification channels and other settings, as environment variables
-  # (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, SLACK_WEBHOOK_URL,
+  # (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, SLACK_WEBHOOK_URL or
+  # SLACK_BOT_TOKEN and SLACK_CHANNEL,
   # RIKUGAN_SWEEP_INTERVAL, ALERTMANAGER_URL…). Put credentials in a
   # Secret and reference it through envFrom. Set RIKUGAN_HEARTBEAT_URL
   # (a dead man's switch, pinged every RIKUGAN_HEARTBEAT_INTERVAL, 5m)

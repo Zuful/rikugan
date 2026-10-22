@@ -37,7 +37,7 @@ func Configured(logger *slog.Logger) ([]provider.CommunicationProvider, error) {
 			out = append(out, p)
 		}
 	}
-	if os.Getenv("SLACK_WEBHOOK_URL") != "" {
+	if os.Getenv("SLACK_WEBHOOK_URL") != "" || os.Getenv("SLACK_BOT_TOKEN") != "" || os.Getenv("SLACK_CHANNEL") != "" {
 		p, err := slack.FromEnv(logger)
 		if err != nil {
 			errs = append(errs, err)
