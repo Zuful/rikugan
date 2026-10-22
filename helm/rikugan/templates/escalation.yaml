@@ -83,6 +83,25 @@ spec:
         fsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
+      # OpenCode writes into its config directory as it loads it (a
+      # .gitignore, its plugin dependencies), so the generated config is
+      # copied from the ConfigMap into a writable emptyDir first.
+      initContainers:
+        - name: config
+          image: "{{ $esc.opencode.image.repository }}:{{ $esc.opencode.image.tag }}"
+          imagePullPolicy: {{ $esc.opencode.image.pullPolicy }}
+          command: ["cp", "/etc/opencode-config/opencode.json", "/home/opencode/.config/opencode/opencode.json"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/opencode-config
+              readOnly: true
+            - name: xdg-config
+              mountPath: /home/opencode/.config/opencode
       containers:
         - name: opencode
           image: "{{ $esc.opencode.image.repository }}:{{ $esc.opencode.image.tag }}"
@@ -107,7 +126,7 @@ spec:
             - name: HOME
               value: /home/opencode
             - name: XDG_CONFIG_HOME
-              value: /etc/xdg
+              value: /home/opencode/.config
             - name: XDG_DATA_HOME
               value: /home/opencode/.local/share
             - name: XDG_CACHE_HOME
@@ -134,9 +153,8 @@ spec:
             capabilities:
               drop: ["ALL"]
           volumeMounts:
-            - name: config
-              mountPath: /etc/xdg/opencode
-              readOnly: true
+            - name: xdg-config
+              mountPath: /home/opencode/.config/opencode
             - name: home
               mountPath: /home/opencode
             - name: work
@@ -149,6 +167,8 @@ spec:
         - name: config
           configMap:
             name: {{ $opencode }}
+        - name: xdg-config
+          emptyDir: {}
         - name: home
           emptyDir: {}
         - name: work

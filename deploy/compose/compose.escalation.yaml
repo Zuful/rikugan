@@ -40,13 +40,18 @@ services:
     image: ghcr.io/anomalyco/opencode:1.19.3
     container_name: rikugan-opencode
     restart: unless-stopped
-    command: ["serve", "--pure", "--hostname", "0.0.0.0", "--port", "4096", "--print-logs", "--log-level", "WARN"]
+    # OpenCode writes into its config directory as it loads it, so the
+    # generated config is copied into a writable tmpfs first.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - mkdir -p "$$XDG_CONFIG_HOME/opencode" && cp /etc/opencode-config/opencode.json "$$XDG_CONFIG_HOME/opencode/" &&
+        exec opencode serve --pure --hostname 0.0.0.0 --port 4096 --print-logs --log-level WARN
     user: "65532:65532"
     read_only: true
     working_dir: /work
     environment:
       HOME: /home/opencode
-      XDG_CONFIG_HOME: /etc/xdg
+      XDG_CONFIG_HOME: /home/opencode/.config
       XDG_DATA_HOME: /home/opencode/.local/share
       XDG_CACHE_HOME: /home/opencode/.cache
       XDG_STATE_HOME: /home/opencode/.local/state
@@ -56,7 +61,7 @@ services:
       - path: opencode.env
         required: false
     volumes:
-      - ./opencode.json:/etc/xdg/opencode/opencode.json:ro
+      - ./opencode.json:/etc/opencode-config/opencode.json:ro
     tmpfs:
       - /home/opencode:uid=65532,gid=65532
       - /work:uid=65532,gid=65532
