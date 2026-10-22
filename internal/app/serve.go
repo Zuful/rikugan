@@ -130,12 +130,16 @@ func Serve(ctx context.Context, logger, verdicts *slog.Logger, version string) e
 	if daemon.Heartbeat, err = serveHeartbeat(logger); err != nil {
 		return err
 	}
+	if daemon.Escalation, err = serveEscalation(agentCfg, notifier); err != nil {
+		return err
+	}
 	logger.Info("rikugan serve starting",
 		slog.String("state_dir", stateDir),
 		slog.String("namespaces", strings.Join(namespaces, ",")),
 		slog.String("listen", listen),
 		slog.Bool("token", token != ""),
 		slog.Bool("heartbeat", daemon.Heartbeat != nil),
+		slog.Bool("escalation", daemon.Escalation != nil),
 	)
 	servers := []namedServer{{"verdicts API", &http.Server{
 		Addr:              listen,
