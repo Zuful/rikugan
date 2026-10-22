@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"log"
 	"math"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -60,5 +63,25 @@ func TestDailyFactor(t *testing.T) {
 	}
 	if got := dailyFactor(day, 0, 0.5, 14*time.Hour); got != 1 {
 		t.Errorf("no cycle: %v", got)
+	}
+}
+
+func TestThrottled(t *testing.T) {
+	var out bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&out)
+	defer log.SetOutput(prev)
+	start := time.Unix(0, 0)
+	logLine := throttled("trap", 10*time.Second)
+	for _, after := range []time.Duration{0, time.Second, 9 * time.Second, 10 * time.Second, 15 * time.Second, 21 * time.Second} {
+		logLine(start.Add(after))
+	}
+	if got := strings.Count(out.String(), "trap"); got != 3 {
+		t.Errorf("logged %d times, want 3 (at 0, 10 s and 21 s): %q", got, out.String())
+	}
+	out.Reset()
+	throttled("", time.Second)(start)
+	if out.Len() != 0 {
+		t.Errorf("an empty line logged %q", out.String())
 	}
 }

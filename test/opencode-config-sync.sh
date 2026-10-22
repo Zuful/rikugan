@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The OpenCode config of deploy/compose is the chart's generated one,
-# but for the address of rikugan serve: a change to one must reach the
-# other.
+# but for the address of rikugan serve; deploy/lab's is deploy/compose's
+# plus the Ollama provider. A change to one must reach the others.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 helm template sync "$root/helm/rikugan" --set serve.enabled=true --set prometheus.url=http://p:9090 \
@@ -20,3 +20,12 @@ for doc in yaml.safe_load_all(sys.stdin):
 else:
     sys.exit("no OpenCode ConfigMap rendered")
 ' "$root/deploy/compose/opencode.json"
+python3 -c '
+import json, sys
+compose, lab = (json.load(open(p)) for p in sys.argv[1:])
+for key in ("model", "provider"):
+    lab.pop(key, None)
+if lab != compose:
+    sys.exit("deploy/lab/opencode.json differs from deploy/compose/opencode.json beyond its model and provider")
+print("lab OpenCode config in sync")
+' "$root/deploy/compose/opencode.json" "$root/deploy/lab/opencode.json"

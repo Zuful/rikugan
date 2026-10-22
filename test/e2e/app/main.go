@@ -12,7 +12,9 @@
 //     (default: for good), for a regression that recovers;
 //   - CRASH=true: exit at once, so the instance never becomes ready;
 //   - OOM=true: allocate until the container's limit kills it;
-//   - LEAK_MB_PER_MIN: retain that many MiB more every minute.
+//   - LEAK_MB_PER_MIN: retain that many MiB more every minute;
+//   - ERROR_LOG: a line logged with the 500s, at most every 10 seconds,
+//     for what the logs say (the lab's injection canary writes one).
 //
 // Background noise, what a healthy service does anyway:
 //
@@ -88,6 +90,7 @@ func main() {
 		go pauses(&pause, b.pauseEvery, b.pauseFor)
 	}
 	dep := &http.Client{Timeout: time.Second}
+	errorLog := throttled(os.Getenv("ERROR_LOG"), 10*time.Second)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/work", func(w http.ResponseWriter, _ *http.Request) {
@@ -99,6 +102,9 @@ func main() {
 		delay, code := b.outcome(start.Sub(b.started), rand.Float64, rand.IntN) // #nosec G404 -- test workload
 		if code == http.StatusOK && b.dependency != "" && !reachable(dep, b.dependency) {
 			code = http.StatusServiceUnavailable
+		}
+		if code == http.StatusInternalServerError {
+			errorLog(start)
 		}
 		time.Sleep(delay)
 		w.WriteHeader(code)
@@ -179,6 +185,25 @@ func (b behaviour) outcome(age time.Duration, float func() float64, intn func(in
 		return delay, http.StatusInternalServerError
 	}
 	return delay, http.StatusOK
+}
+
+// throttled returns a function logging line at most once every
+// interval; an empty line logs nothing.
+func throttled(line string, interval time.Duration) func(now time.Time) {
+	var mu sync.Mutex
+	var last time.Time
+	return func(now time.Time) {
+		if line == "" {
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if !last.IsZero() && now.Sub(last) < interval {
+			return
+		}
+		last = now
+		log.Print(line) // #nosec G706 -- the lab injects this line on purpose (ERROR_LOG)
+	}
 }
 
 // pauses stops every request for d, every interval.

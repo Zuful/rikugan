@@ -75,6 +75,25 @@ func TestInvestigateDone(t *testing.T) {
 	}
 }
 
+// The agent cites tools under OpenCode's prefix: its quotes are still
+// checked against the calls.
+func TestInvestigateUnprefixesTools(t *testing.T) {
+	r := &fakeRunner{res: opencode.Result{
+		Calls: []escalation.ToolCall{{Tool: "get_logs", Output: "panic: nil map write"}},
+		Answer: answer(t, escalation.Finding{
+			Cause:      "A nil map write.",
+			Evidence:   []escalation.Evidence{{Tool: "rikugan_get_logs", Quote: "panic: nil map write"}},
+			RuledOut:   []escalation.RuledOut{{Hypothesis: "a bad config", Reason: "unchanged", Tool: "rikugan_get_logs", Quote: "nil map"}},
+			Action:     escalation.Action{Kind: escalation.ActionInspect, Target: "rikugan_get_logs"},
+			Confidence: escalation.ConfidenceMedium,
+		}),
+	}}
+	inv := (&Investigator{Runner: r, Timeout: time.Minute}).Investigate(context.Background(), inc)
+	if strings.Contains(inv.Reply.Body, escalation.Unverified) || strings.Contains(inv.Reply.Body, "rikugan_") {
+		t.Errorf("prefixed tools not matched with the calls:\n%s", inv.Reply.Body)
+	}
+}
+
 func TestInvestigateFailures(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

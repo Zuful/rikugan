@@ -1,0 +1,75 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "autoupdate": false,
+  "mcp": {
+    "rikugan": {
+      "enabled": true,
+      "headers": {
+        "Authorization": "Bearer {env:RIKUGAN_AGENT_MCP_TOKEN}"
+      },
+      "oauth": false,
+      "type": "remote",
+      "url": "http://rikugan-serve:8081/mcp"
+    }
+  },
+  "model": "ollama/{env:LAB_OLLAMA_MODEL}",
+  "permission": {
+    "bash": "deny",
+    "doom_loop": "deny",
+    "edit": "deny",
+    "external_directory": "deny",
+    "glob": "deny",
+    "grep": "deny",
+    "list": "deny",
+    "lsp": "deny",
+    "question": "deny",
+    "read": "deny",
+    "skill": "deny",
+    "task": "deny",
+    "todowrite": "deny",
+    "webfetch": "deny",
+    "websearch": "deny"
+  },
+  "provider": {
+    "ollama": {
+      "models": {
+        "{env:LAB_OLLAMA_MODEL}": {
+          "limit": {
+            "context": 32768,
+            "output": 4096
+          },
+          "name": "{env:LAB_OLLAMA_MODEL}",
+          "tool_call": true
+        }
+      },
+      "name": "Ollama",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "{env:LAB_OLLAMA_URL}"
+      }
+    }
+  },
+  "share": "disabled",
+  "tools": {
+    "apply_patch": false,
+    "bash": false,
+    "codesearch": false,
+    "edit": false,
+    "glob": false,
+    "grep": false,
+    "invalid": false,
+    "list": false,
+    "lsp": false,
+    "multiedit": false,
+    "patch": false,
+    "question": false,
+    "read": false,
+    "skill": false,
+    "task": false,
+    "todoread": false,
+    "todowrite": false,
+    "webfetch": false,
+    "websearch": false,
+    "write": false
+  }
+}

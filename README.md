@@ -576,7 +576,7 @@ It runs as a **single instance**: a lock on the state directory makes a second o
 
 **Escalation to an agent (in progress).** With `RIKUGAN_ESCALATION=on`, each critical that reached a channel is investigated by an agent running on an [OpenCode](https://opencode.ai) server (`OPENCODE_URL`, `OPENCODE_SERVER_PASSWORD`), whose only tools are those of the agent MCP server above. Its answer is posted in the critical's thread (on Slack, with a bot; a webhook quotes the critical instead). The agent only reads and suggests: rikugan never acts on what it says.
 
-- **The answer is checked before it is posted.**
+- **The answer is checked before it is posted.** The agent answers with a JSON object following rikugan's schema, in its last message; an agent that ends without one is reminded once, within the same bounds.
   - The suggested action is one of rollback, restart, scale, inspect, escalate or none, and its target must belong to the incident; otherwise it is rejected.
   - Each quoted piece of evidence must appear in the output of a tool call the agent really made; otherwise it is marked unverified.
   - High confidence without verified evidence is lowered.
@@ -585,7 +585,8 @@ It runs as a **single instance**: a lock on the state directory makes a second o
 - **The OpenCode server is checked before each investigation.** Its API can run commands, so the password is required. Escalation is blocked, with one warning to the team, if any of these happens:
   - one of its native tools is unknown to rikugan;
   - its tool list cannot be read;
-  - an MCP server other than rikugan's is configured.
+  - an MCP server other than rikugan's is configured;
+  - rikugan's MCP server is not connected, even after rikugan asks OpenCode to reconnect it (OpenCode does not retry by itself: rikugan serve down when OpenCode started, or restarted since).
 - **Bounds.** One investigation per incident, which a sweep's grouped critical counts as one. The other limits are configurable:
   - `RIKUGAN_ESCALATION_PER_HOUR`: investigations started per hour, default 4;
   - `RIKUGAN_ESCALATION_CONCURRENCY`: investigations running at once, default 1;
@@ -595,6 +596,8 @@ It runs as a **single instance**: a lock on the state directory makes a second o
 
   A cap reached, a timeout, a failure, or a restart during an investigation (never run again) each leave a line in the thread.
 - `RIKUGAN_ESCALATION_TEAMS` lists the teams an "escalate" suggestion may name.
+
+For a local model, the lab runs the escalation on Ollama, with an injection canary: see [deploy/lab](deploy/lab/README.md#7-escalation-an-agent-investigates-each-critical).
 
 **Packaging the escalation.** OpenCode runs apart from rikugan serve, never as a sidecar: a sidecar would share the pod's network (the verdicts API on loopback) and often its ServiceAccount token.
 

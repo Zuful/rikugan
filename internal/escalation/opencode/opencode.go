@@ -3,6 +3,14 @@
 // investigation, a prompt whose answer must follow a JSON Schema, and
 // the session's tool calls, tokens and cost read back afterwards.
 //
+// The answer is asked for as JSON in the agent's last message, not
+// through OpenCode's structured output ("format": json_schema): in
+// 1.19.3, a session whose prompt carries a format can no longer be
+// listed (GET /session/{id}/message answers 400, the stored format
+// failing its own response schema), and the StructuredOutput tool it
+// adds would read as a native tool call. rikugan validates the answer
+// anyway.
+//
 // The server is a code execution surface (shell, terminal, file reads,
 // config changes are all in its API), so the client requires its
 // password, and Preflight refuses to go on unless every native tool can
@@ -76,7 +84,11 @@ func New(baseURL, password string, opts ...restclient.Option) (*Client, error) {
 //     KnownNativeTools: an unknown tool, or an answer of another shape,
 //     is an error;
 //   - the server's MCP servers are rikugan's alone: another one, added
-//     through the API, could bring tools of its own.
+//     through the API, could bring tools of its own;
+//   - rikugan's is connected. OpenCode does not retry a connection that
+//     failed (rikugan serve not up yet when it started, a restart since),
+//     so Preflight asks for one; without it the agent would have no
+//     tools at all.
 //
 // It returns the native tools, all of which Run switches off.
 func (c *Client) Preflight(ctx context.Context) ([]string, error) {
@@ -112,6 +124,9 @@ func (c *Client) Preflight(ctx context.Context) ([]string, error) {
 		sort.Strings(others)
 		return nil, fmt.Errorf("the server's MCP servers must be %q alone (found others: %v)", MCPServer, others)
 	}
+	if err := c.connected(ctx); err != nil {
+		return nil, err
+	}
 	var natives []string
 	for _, id := range ids {
 		if !strings.HasPrefix(id, MCPServer+"_") {
@@ -121,12 +136,51 @@ func (c *Client) Preflight(ctx context.Context) ([]string, error) {
 	return natives, nil
 }
 
+// connected checks that rikugan's MCP server is connected, asking for a
+// connection once when it is not.
+func (c *Client) connected(ctx context.Context) error {
+	type status struct {
+		Status string `json:"status"`
+		Error  string `json:"error"`
+	}
+	read := func() (status, error) {
+		var all map[string]status
+		if err := c.rest.GetJSON(ctx, c.base+"/mcp", &all); err != nil {
+			return status{}, fmt.Errorf("MCP status cannot be read: %w", err)
+		}
+		return all[MCPServer], nil
+	}
+	st, err := read()
+	if err != nil || st.Status == "connected" {
+		return err
+	}
+	if err := c.rest.PostJSON(ctx, c.base+"/mcp/"+MCPServer+"/connect", struct{}{}, nil); err != nil {
+		return fmt.Errorf("rikugan's MCP server is %s and reconnecting failed: %w", orUnknown(st.Status), err)
+	}
+	if st, err = read(); err != nil || st.Status == "connected" {
+		return err
+	}
+	msg := fmt.Sprintf("rikugan's MCP server is not connected to OpenCode (%s", orUnknown(st.Status))
+	if st.Error != "" {
+		msg += ": " + st.Error
+	}
+	return errors.New(msg + "): check RIKUGAN_AGENT_MCP_TOKEN and that OpenCode reaches rikugan serve's agent MCP port")
+}
+
+func orUnknown(s string) string {
+	if s == "" {
+		return "status unknown"
+	}
+	return s
+}
+
 // Request is an investigation to run.
 type Request struct {
 	Title  string
 	System string
 	Prompt string
-	// Schema is the JSON Schema the answer must follow.
+	// Schema is the JSON Schema the answer must follow, given to the
+	// agent with the prompt.
 	Schema map[string]any
 	// Natives are switched off for the prompt (from Preflight).
 	Natives []string
@@ -140,8 +194,11 @@ type Request struct {
 // Result is what an investigation produced.
 type Result struct {
 	SessionID string
-	// Answer is the structured answer, nil when there is none.
+	// Answer is the JSON object of the agent's last message, nil when
+	// there is none.
 	Answer json.RawMessage
+	// noAnswer says what the last message lacks when Answer is nil.
+	noAnswer string
 	// Calls are the tool calls, rikugan's tools under their own names.
 	Calls []escalation.ToolCall
 	// Native are the native tools the agent called anyway: any makes the
@@ -158,9 +215,17 @@ type Result struct {
 	Err string
 }
 
+// answerFormat follows the prompt: the shape of the answer.
+const answerFormat = "\n\nWhen you are done, answer with one JSON object and nothing else: no prose, no code fence. It must follow this JSON Schema:\n"
+
+// reminder is sent once when the agent ended without such an answer.
+const reminder = "Your last message is not the answer required (%s). Answer again with the JSON object alone, following the JSON Schema given earlier. Do not call any tool."
+
 // Run creates a session, sends the prompt and waits for the session to
 // end, aborting it past the request's bounds, then reads back what it
-// did. The session is left on the server, so that a person can open it.
+// did. An agent that ends without a JSON answer is reminded of it once,
+// within the same bounds. The session is left on the server, so that a
+// person can open it.
 func (c *Client) Run(ctx context.Context, req Request) (Result, error) {
 	var sess struct {
 		ID string `json:"id"`
@@ -179,29 +244,46 @@ func (c *Client) Run(ctx context.Context, req Request) (Result, error) {
 	if sess.ID == "" {
 		return Result{}, errors.New("create session: no session id in the answer")
 	}
-	tools := map[string]bool{}
-	for _, n := range req.Natives {
-		tools[n] = false
+	schema, err := json.Marshal(req.Schema)
+	if err != nil {
+		return Result{SessionID: sess.ID}, fmt.Errorf("answer schema: %w", err)
 	}
-	if err := c.rest.PostJSON(ctx, c.base+"/session/"+url.PathEscape(sess.ID)+"/prompt_async", map[string]any{
-		"system": req.System,
-		"tools":  tools,
-		"format": map[string]any{"type": "json_schema", "schema": req.Schema, "retryCount": 1},
-		"parts":  []map[string]string{{"type": "text", "text": req.Prompt}},
-	}, nil); err != nil {
-		return Result{SessionID: sess.ID}, fmt.Errorf("send prompt: %w", err)
+	deadline := time.Now().Add(req.Timeout)
+	if err := c.prompt(ctx, sess.ID, req, req.Prompt+answerFormat+string(schema)); err != nil {
+		return Result{SessionID: sess.ID}, err
 	}
-
-	stopped := c.wait(ctx, sess.ID, req)
+	stopped := c.wait(ctx, sess.ID, req, deadline)
 	res, err := c.collect(context.WithoutCancel(ctx), sess.ID)
+	if err == nil && stopped == "" && res.Answer == nil && res.Err == "" && len(res.Native) == 0 {
+		if err := c.prompt(ctx, sess.ID, req, fmt.Sprintf(reminder, res.noAnswer)); err != nil {
+			return res, err
+		}
+		stopped = c.wait(ctx, sess.ID, req, deadline)
+		res, err = c.collect(context.WithoutCancel(ctx), sess.ID)
+	}
 	res.Stopped = stopped
 	return res, err
 }
 
+// prompt sends text to the session, every native tool off.
+func (c *Client) prompt(ctx context.Context, id string, req Request, text string) error {
+	tools := map[string]bool{}
+	for _, n := range req.Natives {
+		tools[n] = false
+	}
+	if err := c.rest.PostJSON(ctx, c.base+"/session/"+url.PathEscape(id)+"/prompt_async", map[string]any{
+		"system": req.System,
+		"tools":  tools,
+		"parts":  []map[string]string{{"type": "text", "text": text}},
+	}, nil); err != nil {
+		return fmt.Errorf("send prompt: %w", err)
+	}
+	return nil
+}
+
 // wait polls the session until it is idle, aborting it when a bound is
 // passed; it returns the bound, or "" when the session ended by itself.
-func (c *Client) wait(ctx context.Context, id string, req Request) string {
-	deadline := time.Now().Add(req.Timeout)
+func (c *Client) wait(ctx context.Context, id string, req Request, deadline time.Time) string {
 	abort := func(why string) string {
 		actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer cancel()
@@ -240,6 +322,7 @@ func (c *Client) wait(ctx context.Context, id string, req Request) string {
 
 type part struct {
 	Type   string `json:"type"`
+	Text   string `json:"text"`
 	Tool   string `json:"tool"`
 	Tokens *struct {
 		Input     float64 `json:"input"`
@@ -256,9 +339,8 @@ type part struct {
 
 type message struct {
 	Info struct {
-		Role       string          `json:"role"`
-		Structured json.RawMessage `json:"structured"`
-		Error      *struct {
+		Role  string `json:"role"`
+		Error *struct {
 			Name string `json:"name"`
 			Data struct {
 				Message string `json:"message"`
@@ -268,20 +350,27 @@ type message struct {
 	Parts []part `json:"parts"`
 }
 
-// collect reads the session's messages: tool calls, the structured
-// answer, and tokens and cost summed over the steps.
+// collect reads the session's messages: tool calls, the answer in the
+// last message with text, and tokens and cost summed over the steps.
 func (c *Client) collect(ctx context.Context, id string) (Result, error) {
 	res := Result{SessionID: id, Cost: -1}
 	var msgs []message
 	if err := c.rest.GetJSON(ctx, c.base+"/session/"+url.PathEscape(id)+"/message", &msgs); err != nil {
 		return res, fmt.Errorf("read session messages: %w", err)
 	}
+	last := ""
 	for _, m := range msgs {
 		if m.Info.Role != "assistant" {
 			continue
 		}
-		if len(m.Info.Structured) > 0 && string(m.Info.Structured) != "null" {
-			res.Answer = m.Info.Structured
+		var text strings.Builder
+		for _, p := range m.Parts {
+			if p.Type == "text" {
+				text.WriteString(p.Text)
+			}
+		}
+		if strings.TrimSpace(text.String()) != "" {
+			last = text.String()
 		}
 		if m.Info.Error != nil {
 			res.Err = strings.TrimSpace(m.Info.Error.Name + ": " + m.Info.Error.Data.Message)
@@ -315,5 +404,25 @@ func (c *Client) collect(ctx context.Context, id string) (Result, error) {
 	if res.Cost == 0 && res.Tokens > 0 {
 		res.Cost = -1 // tokens without a price: the model's cost is unknown
 	}
+	res.Answer, res.noAnswer = answer(last)
 	return res, nil
+}
+
+// answer finds the JSON object in the agent's last message, which a
+// model may wrap in a code fence or a sentence; otherwise it says what
+// is wrong.
+func answer(text string) (json.RawMessage, string) {
+	start, end := strings.Index(text, "{"), strings.LastIndex(text, "}")
+	switch {
+	case strings.TrimSpace(text) == "":
+		return nil, "no text"
+	case start < 0 || end < start:
+		return nil, "no JSON object"
+	}
+	raw := json.RawMessage(text[start : end+1])
+	var obj map[string]any
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, "invalid JSON: " + err.Error()
+	}
+	return raw, ""
 }

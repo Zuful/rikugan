@@ -100,6 +100,7 @@ func (i *Investigator) Investigate(ctx context.Context, inc watch.Incident) watc
 		}
 		return inv
 	}
+	unprefix(&f)
 	calls := map[string]int{}
 	for _, c := range res.Calls {
 		calls[c.Tool]++
@@ -152,6 +153,22 @@ func Prompt(inc watch.Incident) string {
 	}
 	b.WriteString("\nAnswer in the required JSON shape.")
 	return b.String()
+}
+
+// unprefix names the tools the finding cites as rikugan does: the agent
+// sees them under OpenCode's MCP prefix (rikugan_get_logs), the calls
+// are recorded without it.
+func unprefix(f *escalation.Finding) {
+	strip := func(s string) string { return strings.TrimPrefix(s, opencode.MCPServer+"_") }
+	for i := range f.Evidence {
+		f.Evidence[i].Tool = strip(f.Evidence[i].Tool)
+	}
+	for i := range f.RuledOut {
+		f.RuledOut[i].Tool = strip(f.RuledOut[i].Tool)
+	}
+	if f.Action.Kind == escalation.ActionInspect {
+		f.Action.Target = strip(f.Action.Target)
+	}
 }
 
 func line(text string) provider.TeamMessage {
