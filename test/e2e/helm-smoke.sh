@@ -82,7 +82,11 @@ fi
 # The generated OpenCode config is the one the server loaded: rikugan's
 # MCP server alone, and native tools rikugan knows. This is the check
 # rikugan runs before each investigation.
-password=$(kubectl -n "$ns" get secret "${release}-rikugan-escalation" -o jsonpath='{.data.opencode-password}' | base64 -d)
+password=$(kubectl -n "$ns" get secret "${release}-rikugan-escalation" -o jsonpath="{.data['opencode-password']}" | base64 -d)
+if [ -z "$password" ]; then
+  echo "no OpenCode password in the escalation Secret" >&2
+  exit 1
+fi
 kubectl -n "$ns" port-forward "svc/${release}-rikugan-opencode" 14096:4096 >/dev/null 2>&1 &
 pf=$!
 trap 'kill $pf 2>/dev/null || true' EXIT
