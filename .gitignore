@@ -35,6 +35,8 @@ go.work.sum
 .env
 .env.local
 .env.*.local
+opencode.env
+escalation.env
 
 # Build / hot-reload scratch space.
 /tmp/

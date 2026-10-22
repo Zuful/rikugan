@@ -59,6 +59,76 @@ serve:
   # Per-service thresholds and query templates, mounted as the file named
   # by RIKUGAN_HEALTH_CONFIG. Empty: the defaults.
   healthConfig: ""
+  # Escalation of each delivered critical to an agent on an OpenCode
+  # server (in progress). The agent's only tools are rikugan's, served
+  # read-only by rikugan serve on the agent MCP port; OpenCode runs in a
+  # Deployment of its own, with no ServiceAccount token and no backend
+  # credential. Tool outputs, logs included, with whatever personal data
+  # they hold, are sent to the LLM provider: see escalation.logs and
+  # escalation.llmEndpoint.
+  escalation:
+    enabled: false
+    # Port of the agent MCP server in the serve pod.
+    mcpPort: 8081
+    # Keep the tools that return log lines (get_logs, search_logs,
+    # tail_logs, detect_log_anomalies) from the agent: false. Under the
+    # GDPR, a self-hosted model (llmEndpoint) is the other way out.
+    logs: true
+    # Bounds (RIKUGAN_ESCALATION_*): investigations started per hour,
+    # monthly budget in dollars, investigations at once.
+    perHour: 4
+    monthlyBudget: 5
+    concurrency: 1
+    # Teams an "escalate" suggestion may name.
+    teams: []
+    # Secret holding the OpenCode server password and the agent MCP
+    # token (keys "opencode-password" and "agent-mcp-token"). Empty: the
+    # chart generates them once into <release>-rikugan-escalation and
+    # keeps them across upgrades. REQUIRED with GitOps, as for
+    # serve.auth.existingSecret.
+    existingSecret: ""
+    opencode:
+      image:
+        repository: ghcr.io/anomalyco/opencode
+        # Pinned: rikugan checks OpenCode's native tools against the
+        # versions it knows, and blocks escalation on an unknown one.
+        tag: "1.19.3"
+        pullPolicy: IfNotPresent
+      # The model, as provider/model (e.g. openai/gpt-5, ollama/qwen3:32b).
+      model: ""
+      # OpenCode "provider" config (a self-hosted model's baseURL…),
+      # rendered as is into the generated config.
+      provider: {}
+      # The LLM provider's key, as environment variables from a Secret
+      # (e.g. OPENAI_API_KEY): envFrom or env.
+      env: []
+      envFrom: []
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          cpu: "1"
+          memory: 1Gi
+    # Network policies: OpenCode reachable from rikugan serve only, and
+    # reaching only DNS, the agent MCP port and HTTPS outside private
+    # ranges; the agent MCP port reachable from OpenCode only.
+    networkPolicy:
+      enabled: true
+      # Ranges OpenCode may not reach on 443 (no lateral movement into
+      # the cluster). Add the cluster's pod and service CIDRs when they
+      # are public ranges.
+      except:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+        - 100.64.0.0/10
+        - 169.254.0.0/16
+      # A self-hosted model in the cluster or on the local network
+      # (Ollama, vLLM), which the ranges above would block: one targeted
+      # exception, as a CIDR or a pod and namespace selector, with its
+      # ports. Example: {cidr: 10.20.0.15/32, ports: [11434]}.
+      llmEndpoint: {}
   resources:
     requests:
       cpu: 50m

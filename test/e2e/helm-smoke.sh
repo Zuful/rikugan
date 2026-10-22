@@ -13,10 +13,10 @@ diagnose() {
   echo "--- pods" >&2
   kubectl -n "$ns" get pods -o wide >&2 || true
   echo "--- describe" >&2
-  kubectl -n "$ns" describe pod -l app.kubernetes.io/component=serve >&2 || true
+  kubectl -n "$ns" describe pod -l 'app.kubernetes.io/component in (serve,opencode)' >&2 || true
   echo "--- logs" >&2
-  kubectl -n "$ns" logs -l app.kubernetes.io/component=serve --tail=50 >&2 || true
-  kubectl -n "$ns" logs -l app.kubernetes.io/component=serve --tail=50 --previous >&2 || true
+  kubectl -n "$ns" logs -l 'app.kubernetes.io/component in (serve,opencode)' --tail=50 >&2 || true
+  kubectl -n "$ns" logs -l 'app.kubernetes.io/component in (serve,opencode)' --tail=50 --previous >&2 || true
   echo "--- pvc" >&2
   kubectl -n "$ns" get pvc >&2 || true
 }
@@ -55,4 +55,56 @@ if ! grep -q '"rikugan serve starting"' <<<"$logs"; then
   echo "$logs" >&2
   exit 1
 fi
-echo "helm smoke test passed: serve Ready, token kept across upgrade, single instance"
+
+# Escalation: OpenCode in its own Deployment, rikugan serve wired to it.
+# A notification channel is required; a placeholder Telegram bot does,
+# nothing is sent during the test.
+helm upgrade --install "$release" helm/rikugan -n "$ns" \
+  --set image.repository=rikugan --set image.tag=test --set image.pullPolicy=Never \
+  --set prometheus.url=http://prometheus.monitoring:9090 \
+  --set serve.enabled=true --set serve.escalation.enabled=true \
+  --set 'serve.env[0].name=TELEGRAM_BOT_TOKEN' --set-string 'serve.env[0].value=0:placeholder' \
+  --set 'serve.env[1].name=TELEGRAM_CHAT_ID' --set-string 'serve.env[1].value=1' --wait=false
+kubectl -n "$ns" rollout status "deployment/${release}-rikugan-opencode" --timeout=300s
+kubectl -n "$ns" rollout status "deployment/${release}-rikugan-serve" --timeout=180s
+sa_token=$(kubectl -n "$ns" get pod -l app.kubernetes.io/component=opencode -o jsonpath='{.items[0].spec.automountServiceAccountToken}')
+if [ "$sa_token" != "false" ]; then
+  echo "the OpenCode pod mounts a ServiceAccount token" >&2
+  exit 1
+fi
+logs=$(kubectl -n "$ns" logs "deployment/${release}-rikugan-serve")
+if ! grep -q '"escalation":true' <<<"$logs" || ! grep -q '"agent MCP server"' <<<"$logs"; then
+  echo "rikugan serve did not start with escalation:" >&2
+  echo "$logs" >&2
+  exit 1
+fi
+
+# The generated OpenCode config is the one the server loaded: rikugan's
+# MCP server alone, and native tools rikugan knows. This is the check
+# rikugan runs before each investigation.
+password=$(kubectl -n "$ns" get secret "${release}-rikugan-escalation" -o jsonpath='{.data.opencode-password}' | base64 -d)
+kubectl -n "$ns" port-forward "svc/${release}-rikugan-opencode" 14096:4096 >/dev/null 2>&1 &
+pf=$!
+trap 'kill $pf 2>/dev/null || true' EXIT
+for _ in $(seq 1 30); do
+  curl -sf -o /dev/null -u "opencode:$password" http://127.0.0.1:14096/config && break
+  sleep 2
+done
+status=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:14096/config)
+if [ "$status" != "401" ]; then
+  echo "OpenCode answered $status without its password, want 401" >&2
+  exit 1
+fi
+mcp=$(curl -sf -u "opencode:$password" http://127.0.0.1:14096/config | jq -c '.mcp | keys')
+if [ "$mcp" != '["rikugan"]' ]; then
+  echo "OpenCode's MCP servers are $mcp, want [\"rikugan\"]" >&2
+  exit 1
+fi
+ids=$(curl -sf -u "opencode:$password" http://127.0.0.1:14096/experimental/tool/ids)
+unknown=$(jq -r --argjson known '["invalid","question","bash","read","glob","grep","edit","write","task","webfetch","todowrite","todoread","websearch","skill","apply_patch","list","patch","multiedit","lsp","codesearch"]' \
+  '[.[] | select(startswith("rikugan_") | not) | select(. as $t | $known | index($t) | not)] | join(",")' <<<"$ids")
+if [ -n "$unknown" ]; then
+  echo "OpenCode lists native tools rikugan does not know: $unknown" >&2
+  exit 1
+fi
+echo "helm smoke test passed: serve Ready, token kept across upgrade, single instance; OpenCode Ready, password required, config loaded, natives known"

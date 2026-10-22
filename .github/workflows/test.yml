@@ -119,6 +119,8 @@ jobs:
         run: |
           helm lint helm/rikugan
           helm lint helm/rikugan --set serve.enabled=true --set prometheus.url=http://prometheus:9090
+          helm lint helm/rikugan --set serve.enabled=true --set prometheus.url=http://prometheus:9090 --set serve.escalation.enabled=true
+          test/opencode-config-sync.sh
 
       - name: Smoke-test rikugan serve from the Helm chart
         run: |

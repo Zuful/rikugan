@@ -41,6 +41,10 @@ spec:
           ports:
             - name: api
               containerPort: 8080
+            {{- if include "rikugan.escalationOn" . }}
+            - name: agent-mcp
+              containerPort: {{ .Values.serve.escalation.mcpPort }}
+            {{- end }}
           env:
             - name: RIKUGAN_SERVE_LISTEN
               value: "0.0.0.0:8080"
@@ -56,6 +60,37 @@ spec:
             {{- if .Values.prometheus.url }}
             - name: PROMETHEUS_URL
               value: {{ .Values.prometheus.url | quote }}
+            {{- end }}
+            {{- if include "rikugan.escalationOn" . }}
+            {{- $esc := .Values.serve.escalation }}
+            - name: RIKUGAN_AGENT_MCP_LISTEN
+              value: "0.0.0.0:{{ $esc.mcpPort }}"
+            - name: RIKUGAN_AGENT_MCP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "rikugan.escalationSecretName" . }}
+                  key: agent-mcp-token
+            - name: RIKUGAN_ESCALATION
+              value: "on"
+            - name: RIKUGAN_ESCALATION_LOGS
+              value: {{ ternary "on" "off" $esc.logs | quote }}
+            - name: RIKUGAN_ESCALATION_PER_HOUR
+              value: {{ $esc.perHour | quote }}
+            - name: RIKUGAN_ESCALATION_MONTHLY_BUDGET
+              value: {{ $esc.monthlyBudget | quote }}
+            - name: RIKUGAN_ESCALATION_CONCURRENCY
+              value: {{ $esc.concurrency | quote }}
+            {{- with $esc.teams }}
+            - name: RIKUGAN_ESCALATION_TEAMS
+              value: {{ join "," . | quote }}
+            {{- end }}
+            - name: OPENCODE_URL
+              value: "http://{{ include "rikugan.opencodeName" . }}:4096"
+            - name: OPENCODE_SERVER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "rikugan.escalationSecretName" . }}
+                  key: opencode-password
             {{- end }}
             {{- if .Values.serve.healthConfig }}
             - name: RIKUGAN_HEALTH_CONFIG
