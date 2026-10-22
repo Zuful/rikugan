@@ -82,7 +82,7 @@ fi
 # The generated OpenCode config is the one the server loaded: rikugan's
 # MCP server alone, and native tools rikugan knows. This is the check
 # rikugan runs before each investigation.
-password=$(kubectl -n "$ns" get secret "${release}-rikugan-escalation" -o jsonpath="{.data['opencode-password']}" | base64 -d)
+password=$(kubectl -n "$ns" get secret "${release}-rikugan-escalation" -o go-template='{{index .data "opencode-password"}}' | base64 -d)
 if [ -z "$password" ]; then
   echo "no OpenCode password in the escalation Secret" >&2
   exit 1
@@ -90,21 +90,34 @@ fi
 kubectl -n "$ns" port-forward "svc/${release}-rikugan-opencode" 14096:4096 >/dev/null 2>&1 &
 pf=$!
 trap 'kill $pf 2>/dev/null || true' EXIT
-for _ in $(seq 1 30); do
-  curl -sf -o /dev/null -u "opencode:$password" http://127.0.0.1:14096/config && break
-  sleep 2
-done
+# get <path>: OpenCode's answer with the password, the status on
+# stderr and a failure past 60 s.
+get() {
+  local code
+  for _ in $(seq 1 30); do
+    code=$(curl -s -o "$work_dir/body" -w '%{http_code}' -u "opencode:$password" "http://127.0.0.1:14096$1" || true)
+    if [ "$code" = 200 ]; then
+      cat "$work_dir/body"
+      return 0
+    fi
+    sleep 2
+  done
+  echo "GET $1: HTTP $code: $(head -c 500 "$work_dir/body" 2>/dev/null)" >&2
+  return 1
+}
+work_dir=$(mktemp -d)
+get /config >/dev/null
 status=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:14096/config)
 if [ "$status" != "401" ]; then
   echo "OpenCode answered $status without its password, want 401" >&2
   exit 1
 fi
-mcp=$(curl -sf -u "opencode:$password" http://127.0.0.1:14096/config | jq -c '.mcp | keys')
+mcp=$(get /config | jq -c '.mcp | keys')
 if [ "$mcp" != '["rikugan"]' ]; then
   echo "OpenCode's MCP servers are $mcp, want [\"rikugan\"]" >&2
   exit 1
 fi
-ids=$(curl -sf -u "opencode:$password" http://127.0.0.1:14096/experimental/tool/ids)
+ids=$(get /experimental/tool/ids)
 unknown=$(jq -r --argjson known '["invalid","question","bash","read","glob","grep","edit","write","task","webfetch","todowrite","todoread","websearch","skill","apply_patch","list","patch","multiedit","lsp","codesearch"]' \
   '[.[] | select(startswith("rikugan_") | not) | select(. as $t | $known | index($t) | not)] | join(",")' <<<"$ids")
 if [ -n "$unknown" ]; then
