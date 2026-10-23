@@ -14,7 +14,7 @@ RUN CGO_ENABLED=0 go build -ldflags="-s -w -X main.version=${VERSION}" -o /rikug
 # CLI and its compose plugin, which the distroless image does not have:
 #   docker build --target serve-compose -t rikugan:serve-compose .
 # It runs as root to reach the Docker socket (see deploy/compose).
-FROM docker:27.5.1-cli AS serve-compose
+FROM docker:29.9.1-cli AS serve-compose
 
 COPY --from=builder /rikugan /usr/local/bin/rikugan
 
