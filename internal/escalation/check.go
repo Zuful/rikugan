@@ -37,8 +37,8 @@ type Checked struct {
 	// ActionRejected is set when the agent's action named a target
 	// outside the incident, or a kind outside the vocabulary.
 	ActionRejected bool
-	// Downgraded is set when high confidence came without any verified
-	// evidence.
+	// Downgraded is set when high confidence came with evidence not all
+	// verified, or with none.
 	Downgraded bool
 }
 
@@ -62,7 +62,9 @@ type CheckedRuledOut struct {
 //     ctx, becomes none, marked rejected;
 //   - each quote is verified against the outputs of the calls of the
 //     tool it cites (see Quoted);
-//   - high confidence without a single verified quote drops to medium.
+//   - high confidence drops to medium unless every quote is verified,
+//     and there is at least one: a hypothesis resting partly on what
+//     the agent did not read is not sure.
 func Check(f Finding, ctx Context, calls []ToolCall) Checked {
 	c := Checked{Cause: f.Cause, Confidence: f.Confidence}
 	for i, e := range f.Evidence {
@@ -85,7 +87,7 @@ func Check(f Finding, ctx Context, calls []ToolCall) Checked {
 	switch c.Confidence {
 	case ConfidenceLow, ConfidenceMedium:
 	case ConfidenceHigh:
-		if !slices.ContainsFunc(c.Evidence, func(q CheckedQuote) bool { return q.Verified }) {
+		if len(c.Evidence) == 0 || slices.ContainsFunc(c.Evidence, func(q CheckedQuote) bool { return !q.Verified }) {
 			c.Confidence, c.Downgraded = ConfidenceMedium, true
 		}
 	default:

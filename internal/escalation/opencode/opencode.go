@@ -219,7 +219,7 @@ type Result struct {
 const answerFormat = "\n\nWhen you are done, answer with one JSON object and nothing else: no prose, no code fence. It must follow this JSON Schema:\n"
 
 // reminder is sent once when the agent ended without such an answer.
-const reminder = "Your last message is not the answer required (%s). Answer again with the JSON object alone, following the JSON Schema given earlier. Do not call any tool."
+const reminder = "Your last message is not the answer required (%s). Answer again with the JSON object alone, following the JSON Schema given earlier. Your tools are now off."
 
 // Run creates a session, sends the prompt and waits for the session to
 // end, aborting it past the request's bounds, then reads back what it
@@ -249,13 +249,15 @@ func (c *Client) Run(ctx context.Context, req Request) (Result, error) {
 		return Result{SessionID: sess.ID}, fmt.Errorf("answer schema: %w", err)
 	}
 	deadline := time.Now().Add(req.Timeout)
-	if err := c.prompt(ctx, sess.ID, req, req.Prompt+answerFormat+string(schema)); err != nil {
+	if err := c.prompt(ctx, sess.ID, req, req.Prompt+answerFormat+string(schema), true); err != nil {
 		return Result{SessionID: sess.ID}, err
 	}
 	stopped := c.wait(ctx, sess.ID, req, deadline)
 	res, err := c.collect(context.WithoutCancel(ctx), sess.ID)
 	if err == nil && stopped == "" && res.Answer == nil && res.Err == "" && len(res.Native) == 0 {
-		if err := c.prompt(ctx, sess.ID, req, fmt.Sprintf(reminder, res.noAnswer)); err != nil {
+		// rikugan's tools go off too: a model that ended without its
+		// answer may otherwise go on investigating until the timeout.
+		if err := c.prompt(ctx, sess.ID, req, fmt.Sprintf(reminder, res.noAnswer), false); err != nil {
 			return res, err
 		}
 		stopped = c.wait(ctx, sess.ID, req, deadline)
@@ -265,11 +267,15 @@ func (c *Client) Run(ctx context.Context, req Request) (Result, error) {
 	return res, err
 }
 
-// prompt sends text to the session, every native tool off.
-func (c *Client) prompt(ctx context.Context, id string, req Request, text string) error {
+// prompt sends text to the session, every native tool off, and
+// rikugan's too unless withTools.
+func (c *Client) prompt(ctx context.Context, id string, req Request, text string, withTools bool) error {
 	tools := map[string]bool{}
 	for _, n := range req.Natives {
 		tools[n] = false
+	}
+	if !withTools {
+		tools[MCPServer+"_*"] = false
 	}
 	if err := c.rest.PostJSON(ctx, c.base+"/session/"+url.PathEscape(id)+"/prompt_async", map[string]any{
 		"system": req.System,
@@ -283,6 +289,11 @@ func (c *Client) prompt(ctx context.Context, id string, req Request, text string
 
 // wait polls the session until it is idle, aborting it when a bound is
 // passed; it returns the bound, or "" when the session ended by itself.
+//
+// A session the status does not show busy yet may not have started on
+// the prompt: OpenCode marks it busy only once its loop runs, which
+// takes a moment on a first prompt. Until wait has seen it busy, idle
+// counts only when the prompt is answered.
 func (c *Client) wait(ctx context.Context, id string, req Request, deadline time.Time) string {
 	abort := func(why string) string {
 		actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
@@ -290,6 +301,7 @@ func (c *Client) wait(ctx context.Context, id string, req Request, deadline time
 		_ = c.rest.PostJSON(actx, c.base+"/session/"+url.PathEscape(id)+"/abort", struct{}{}, nil)
 		return why
 	}
+	busy := false
 	for {
 		select {
 		case <-ctx.Done():
@@ -303,7 +315,9 @@ func (c *Client) wait(ctx context.Context, id string, req Request, deadline time
 			Type string `json:"type"`
 		}
 		if err := c.rest.GetJSON(ctx, c.base+"/session/status", &statuses); err == nil {
-			if st, ok := statuses[id]; !ok || st.Type == "idle" {
+			if st, ok := statuses[id]; ok && st.Type != "idle" {
+				busy = true
+			} else if busy || c.answered(ctx, id) {
 				return ""
 			}
 		}
@@ -339,7 +353,13 @@ type part struct {
 
 type message struct {
 	Info struct {
-		Role  string `json:"role"`
+		ID       string `json:"id"`
+		Role     string `json:"role"`
+		ParentID string `json:"parentID"`
+		Finish   string `json:"finish"`
+		Time     struct {
+			Completed int64 `json:"completed"`
+		} `json:"time"`
 		Error *struct {
 			Name string `json:"name"`
 			Data struct {
@@ -348,6 +368,26 @@ type message struct {
 		} `json:"error"`
 	} `json:"info"`
 	Parts []part `json:"parts"`
+}
+
+// answered reports whether the session's last message is a finished
+// answer to its last prompt: an assistant message, completed, whose
+// parent is the last user message, and that does not go on with tool
+// calls.
+func (c *Client) answered(ctx context.Context, id string) bool {
+	var msgs []message
+	if err := c.rest.GetJSON(ctx, c.base+"/session/"+url.PathEscape(id)+"/message", &msgs); err != nil || len(msgs) == 0 {
+		return false
+	}
+	last := msgs[len(msgs)-1].Info
+	prompt := ""
+	for _, m := range msgs {
+		if m.Info.Role == "user" {
+			prompt = m.Info.ID
+		}
+	}
+	return last.Role == "assistant" && last.ParentID == prompt && prompt != "" &&
+		(last.Time.Completed != 0 || last.Error != nil) && last.Finish != "tool-calls"
 }
 
 // collect reads the session's messages: tool calls, the answer in the

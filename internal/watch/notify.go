@@ -155,6 +155,9 @@ func (n *Notifier) post(ctx context.Context, msgFor func(provider.CommunicationP
 			var ref provider.MessageRef
 			if ref, err = ch.PostMessage(ctx, msg); err == nil {
 				delivered = append(delivered, ch.Name())
+				n.logger().Info("notification sent", slog.String("channel", ch.Name()),
+					slog.String("severity", string(msg.Severity)), slog.String("title", msg.Title),
+					slog.Bool("reply", msg.ReplyTo != nil))
 				if ref != "" {
 					if refs == nil {
 						refs = map[string]provider.MessageRef{}
