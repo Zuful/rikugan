@@ -48,7 +48,7 @@ The full list of concepts Rikugan models, with priorities and planned backends, 
 | Concept | Interface methods | Backends |
 | --- | --- | --- |
 | Orchestration | `ListServices` / `GetServiceState` / `DescribeService` / `GetRecentEvents` / `RestartService` / `GetServiceHistory` | kubernetes (default), docker-compose (selectable via `ORCHESTRATION_PROVIDER`) |
-| Logs | `GetLogs` / `TailLogs` / `SearchLogs` | loki |
+| Logs | `GetLogs` / `TailLogs` / `SearchLogs` | loki; without `LOKI_URL`, docker logs when the orchestration backend is docker-compose |
 | Metrics | `GetMetric` / `CompareToBaseline` / `ListAvailableMetrics` | prometheus |
 | Alerts | `ListActiveAlerts` / `GetAlertDetails` | alertmanager, sentry, pagerduty (one selected as primary via `ALERTS_PROVIDER`; others register their backend-specific extras only) |
 | Deployments | `LastRollout` / `WatchRollouts` | kubernetes, docker-compose (follows `ORCHESTRATION_PROVIDER`) |
@@ -160,7 +160,7 @@ Bridges a logical service name (Jaeger trace identifier, human-typed name) to co
 
 ### Logs concept
 
-Backend: `loki`.
+Backend: `loki`. Without `LOKI_URL`, the docker-compose orchestration backend serves these tools from `docker logs`: what the daemon kept of each existing container's output, `query` and `match` being plain substrings, case aside.
 
 #### `get_logs`
 
@@ -170,7 +170,7 @@ Fetch log lines for a service over a time window. At least one of `service`, `na
 |-------------|--------|----------|--------------------------------------------------------------|
 | `service`   | string | no       | Service name (mapped to the backend's primary label — `app` for Loki). |
 | `namespace` | string | no       | Kubernetes namespace.                                        |
-| `query`     | string | no       | Backend-native query expression (a full LogQL selector for Loki) — overrides label-based selector building when set. |
+| `query`     | string | no       | Backend-native query expression (a full LogQL selector for Loki, a substring for docker) — overrides label-based selector building when set. |
 | `start`     | string | no       | RFC3339 start (default: 1 hour ago).                          |
 | `end`       | string | no       | RFC3339 end (default: now).                                   |
 | `limit`     | number | no       | Max lines (default 100, max 500).                             |
@@ -683,7 +683,7 @@ You can also wire one entry per per-concept binary if you prefer to keep them is
 | `KUBECONFIG`                | Path to kubeconfig file                                       | When orchestration backend is `kubernetes` (default) |
 | `ORCHESTRATION_PROVIDER`    | `kubernetes` (default) or `dockercompose`                     | No        |
 | `COMPOSE_PROJECT_NAME`      | Compose project name (when `ORCHESTRATION_PROVIDER=dockercompose`) | No |
-| `LOKI_URL`                  | Loki API URL                                                  | When logs concept is wired |
+| `LOKI_URL`                  | Loki API URL                                                  | When logs concept is wired (with docker-compose, docker logs serve it otherwise) |
 | `PROMETHEUS_URL`            | Prometheus server URL                                         | When metrics concept is wired |
 | `ALERTS_PROVIDER`           | `alertmanager` / `sentry` / `pagerduty` — selects primary for `list_active_alerts` / `get_alert_details` | No (defaults to first available, priority `alertmanager > sentry > pagerduty`) |
 | `ALERTMANAGER_URL`          | AlertManager API URL                                          | When alertmanager backend is wired |

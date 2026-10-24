@@ -15,7 +15,7 @@ planned but not yet on the critical path (P2).
 | # | Concept | Package name | Priority | Interface in `pkg/provider` | Backends today | Planned |
 |---|---|---|---|---|---|---|
 | 1 | Orchestration | `orchestration` | P0 | `OrchestrationProvider` | kubernetes, dockercompose | — |
-| 2 | Logs | `logs` | P0 | `LogsProvider` | loki | — |
+| 2 | Logs | `logs` | P0 | `LogsProvider` | loki, dockercompose (docker logs) | kubectl logs |
 | 3 | Metrics | `metrics` | P0 | `MetricsProvider` | prometheus | newrelic (#6) |
 | 4 | Alerts | `alerts` | P0 | `AlertsProvider` | alertmanager, sentry, pagerduty | — |
 | 5a | Versioning — commits, diffs | `versioning` | P1 | none yet | github, gitlab | — |
@@ -146,14 +146,14 @@ leaked into its meaning (it was no longer a sequence) and was reverted
 after review. The exception to the rule is over: the concept has two
 backends.
 
-`deployments` is not the only concept with a single-backend interface.
-`LogsProvider` (loki only) and `MetricsProvider` (prometheus only) are
-in the same situation, inherited from the concept-first refactor: the
-plan gave each a second, local fallback (kubectl logs, kubectl top) that
-was never built. Their second backends are still planned — newrelic
-(#6) for metrics; kubectl logs or docker logs for logs, with no date
-set — and until then both interfaces carry the same risk of being
-shaped like their only backend.
+`MetricsProvider` (prometheus only) is still a single-backend
+interface, inherited from the concept-first refactor: the plan gave it a
+local fallback (kubectl top) that was never built, and its second
+backend is still planned (newrelic, #6). Until then it carries the risk
+of being shaped like its only backend. `LogsProvider` was in the same
+situation until docker logs became its second backend: with no query
+language, it reads `Match` as a substring, which the interface already
+allowed.
 
 `communication` got its interface together with its two backends
 (telegram, slack), so it follows the rule.

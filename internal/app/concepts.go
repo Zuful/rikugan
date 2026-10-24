@@ -131,9 +131,20 @@ func registerMetricsConcept(d *dispatcher.Dispatcher, logger *slog.Logger) (prom
 // LogsProvider interface). A missing-config error from the backend is
 // non-fatal and is warned about, matching the rest of the optional
 // providers; a dispatcher registration error is fatal.
-func registerLogsConcept(d *dispatcher.Dispatcher, logger *slog.Logger) error {
+//
+// Without Loki, a Docker Compose orchestration backend serves the
+// concept tools itself, from docker logs: what the daemon kept of each
+// existing container's output.
+func registerLogsConcept(d *dispatcher.Dispatcher, orch provider.OrchestrationProvider, logger *slog.Logger) error {
 	client, err := loki.BuildClient("")
 	if err != nil {
+		if dc, ok := orch.(*dockercompose.Provider); ok {
+			if err := d.Register(logs.NewConceptProvider(dc, "docker", logger)); err != nil {
+				return fmt.Errorf("register logs concept provider: %w", err)
+			}
+			logger.Info("logs concept: docker logs (no LOKI_URL)")
+			return nil
+		}
 		logger.Warn("logs concept (loki) not available, skipping",
 			slog.String("reason", err.Error()),
 		)

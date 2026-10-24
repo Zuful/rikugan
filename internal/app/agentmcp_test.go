@@ -132,6 +132,30 @@ func TestAgentMCPWithoutLogs(t *testing.T) {
 	}
 }
 
+func TestAgentMCPReadsDockerLogsWithoutLoki(t *testing.T) {
+	t.Setenv("ORCHESTRATION_PROVIDER", "dockercompose")
+	t.Setenv("LOKI_URL", "")
+	t.Setenv("PROMETHEUS_URL", "")
+	srv, err := setupAgent(AgentMCPConfig{Token: agentToken, Logs: true}, nil, discard(), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(AgentHandler(srv, agentToken))
+	t.Cleanup(ts.Close)
+	names, err := agentTools(t, ts.URL, agentToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"get_logs", "tail_logs", "search_logs"} {
+		if !slices.Contains(names, want) {
+			t.Errorf("%s missing from %v", want, names)
+		}
+	}
+	if slices.Contains(names, "detect_log_anomalies") {
+		t.Errorf("Loki's detect_log_anomalies exposed without Loki: %v", names)
+	}
+}
+
 func TestAgentMCPRequiresItsToken(t *testing.T) {
 	ts := agentServer(t, true)
 	for _, token := range []string{"", "the-verdicts-api-token-not-the-agent-one"} {

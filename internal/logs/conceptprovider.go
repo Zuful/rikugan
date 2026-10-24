@@ -17,7 +17,7 @@ const (
 	opTimeout    = 30 * time.Second
 	defaultLimit = 100
 	maxLimit     = 500
-	maxLineLen   = 200
+	maxLineLen   = 500
 )
 
 // Compile-time check that *ConceptProvider satisfies provider.Provider
