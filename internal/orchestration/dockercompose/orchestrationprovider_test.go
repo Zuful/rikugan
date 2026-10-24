@@ -154,7 +154,10 @@ func TestProvider_GetRecentEvents_ParsesDockerNDJSON(t *testing.T) {
 	t.Parallel()
 	composeOut := `{"ID":"c1","Name":"web_api_1","Project":"web","Service":"api","State":"running","Image":"api:1.0"}`
 	eventsOut := `{"Type":"container","Action":"die","time":1700000200,"Actor":{"ID":"c1","Attributes":{"name":"web_api_1"}}}
-{"Type":"container","Action":"start","time":1700000210,"Actor":{"ID":"c1","Attributes":{"name":"web_api_1"}}}`
+{"Type":"container","Action":"start","time":1700000210,"Actor":{"ID":"c1","Attributes":{"name":"web_api_1"}}}
+{"Type":"container","Action":"exec_create: /bin/sh -c wget -qO- localhost:8080/healthz","time":1700000220,"Actor":{"ID":"c1","Attributes":{"name":"web_api_1"}}}
+{"Type":"container","Action":"exec_start: /bin/sh -c wget -qO- localhost:8080/healthz","time":1700000220,"Actor":{"ID":"c1","Attributes":{"name":"web_api_1"}}}
+{"Type":"container","Action":"exec_die","time":1700000221,"Actor":{"ID":"c1","Attributes":{"name":"web_api_1","exitCode":"0"}}}`
 	r := &stubRunner{
 		responses: map[string]string{
 			"compose": composeOut,
@@ -167,7 +170,7 @@ func TestProvider_GetRecentEvents_ParsesDockerNDJSON(t *testing.T) {
 		t.Fatalf("GetRecentEvents: %v", err)
 	}
 	if len(events) != 2 {
-		t.Fatalf("expected 2 events, got %d", len(events))
+		t.Fatalf("expected 2 events (healthcheck execs left out), got %d", len(events))
 	}
 	// Newest first.
 	if events[0].Reason != "start" {

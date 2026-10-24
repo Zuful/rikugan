@@ -85,7 +85,7 @@ func registerAll(d *dispatcher.Dispatcher, k8sClient kubernetes.Interface, logge
 
 	// ── Concept providers: each helper warn-and-skips when its backend
 	//    config is missing, so the unified binary degrades gracefully.
-	if err := registerLogsConcept(d, logger); err != nil {
+	if err := registerLogsConcept(d, orch, logger); err != nil {
 		return err
 	}
 	if err := registerAlertsConcept(d, logger); err != nil {
@@ -169,7 +169,7 @@ func SetupLogs(logger *slog.Logger, version string) (*server.MCPServer, error) {
 		return nil, err
 	}
 
-	if err := registerLogsConcept(d, logger); err != nil {
+	if err := registerLogsConcept(d, nil, logger); err != nil {
 		return nil, err
 	}
 	return mcpSrv, nil

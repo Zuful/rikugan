@@ -423,6 +423,11 @@ type dockerEvent struct {
 	} `json:"Actor"`
 }
 
+// parseDockerEvents leaves exec events (exec_create, exec_start,
+// exec_die) out: a healthcheck runs as an exec, so a service with one
+// emits three every interval, and an exec_die reads like a process
+// dying when it is the probe ending. The health_status events carry
+// what the probes found.
 func parseDockerEvents(raw []byte) []provider.Event {
 	var out []provider.Event
 	for _, line := range bytes.Split(raw, []byte("\n")) {
@@ -432,6 +437,9 @@ func parseDockerEvents(raw []byte) []provider.Event {
 		}
 		var e dockerEvent
 		if err := json.Unmarshal(line, &e); err != nil {
+			continue
+		}
+		if strings.HasPrefix(e.Action, "exec_") {
 			continue
 		}
 		out = append(out, provider.Event{
