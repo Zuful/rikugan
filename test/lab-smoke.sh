@@ -103,6 +103,12 @@ if opencode /config not-the-password >/dev/null; then
   echo "OpenCode answered with a wrong password" >&2
   exit 1
 fi
+# LAB_MODEL empty: the agent runs on Ollama's LAB_OLLAMA_MODEL.
+if ! opencode /config | grep -q '"model":"ollama/gemma4:12b-it-qat"'; then
+  echo "OpenCode's model is not Ollama's by default:" >&2
+  opencode /config >&2
+  exit 1
+fi
 connected() { opencode /mcp | grep -q '"rikugan":{"status":"connected"}'; }
 wait_for 60 "OpenCode connected to rikugan's agent MCP server" connected
 [ "$(rollouts api)" -ge 1 ] || { echo "rikugan does not see api's rollout" >&2; exit 1; }

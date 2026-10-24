@@ -12,7 +12,7 @@
       "url": "http://rikugan-serve:8081/mcp"
     }
   },
-  "model": "ollama/{env:LAB_OLLAMA_MODEL}",
+  "model": "{env:LAB_MODEL}",
   "permission": {
     "bash": "deny",
     "doom_loop": "deny",
