@@ -104,6 +104,10 @@ func TestHighConfidenceNeedsVerifiedEvidence(t *testing.T) {
 	if c.Confidence != ConfidenceHigh || c.Downgraded {
 		t.Errorf("confidence %s downgraded %v, want high, false", c.Confidence, c.Downgraded)
 	}
+	c = Check(Finding{Evidence: []Evidence{{Tool: "get_logs", Quote: "connection refused"}, {Tool: "get_logs", Quote: "not in any output"}}, Confidence: ConfidenceHigh}, incident, calls)
+	if c.Confidence != ConfidenceMedium || !c.Downgraded {
+		t.Errorf("one quote of two verified: confidence %s downgraded %v, want medium, true", c.Confidence, c.Downgraded)
+	}
 	if c := Check(Finding{Confidence: "certain"}, incident, nil); c.Confidence != ConfidenceLow {
 		t.Errorf("unknown confidence became %q, want low", c.Confidence)
 	}
@@ -194,7 +198,7 @@ Evidence:
 Ruled out:
 - Database down: no connection errors [get_logs]
 Suggested action: roll shop/api back to revision 6
-Confidence: high
+Confidence: medium (high claimed, some evidence unverified)
 Tools called: get_logs ×2, get_recent_commits ×1
 ` + Disclaimer
 	if msg.Body != want {

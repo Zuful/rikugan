@@ -1,9 +1,11 @@
 package watch
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
@@ -120,10 +122,18 @@ func (f *fakeAlerts) ListActiveAlerts(_ context.Context, service string) ([]prov
 func TestSendRetriesThenGivesUp(t *testing.T) {
 	flaky := &fakeChannel{name: "telegram", fails: 2}
 	down := &fakeChannel{name: "slack", fails: -1}
-	n := &Notifier{Channels: []provider.CommunicationProvider{flaky, down}, Retries: 2, Backoff: time.Millisecond}
+	var logs bytes.Buffer
+	n := &Notifier{Channels: []provider.CommunicationProvider{flaky, down}, Retries: 2, Backoff: time.Millisecond,
+		Logger: slog.New(slog.NewTextHandler(&logs, nil))}
 	got := n.Send(context.Background(), provider.TeamMessage{Title: "t"})
 	if strings.Join(got, ",") != "telegram" || len(flaky.msgs) != 1 {
 		t.Errorf("delivered to %v, telegram got %d", got, len(flaky.msgs))
+	}
+	// Both ends are logged: what went out and what did not.
+	for _, want := range []string{`msg="notification sent" channel=telegram`, `msg="notification not delivered" channel=slack`} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("logs lack %q:\n%s", want, logs.String())
+		}
 	}
 }
 

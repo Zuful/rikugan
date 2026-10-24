@@ -2,6 +2,7 @@ package escalation
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -62,7 +63,11 @@ func Render(c Checked, m Meta) provider.TeamMessage {
 	}
 	fmt.Fprintf(&b, "Suggested action: %s\n", actionLine(c))
 	conf := string(c.Confidence)
-	if c.Downgraded {
+	switch {
+	case !c.Downgraded:
+	case slices.ContainsFunc(c.Evidence, func(q CheckedQuote) bool { return q.Verified }):
+		conf += " (high claimed, some evidence unverified)"
+	default:
 		conf += " (high claimed, no verified evidence)"
 	}
 	fmt.Fprintf(&b, "Confidence: %s\n", conf)

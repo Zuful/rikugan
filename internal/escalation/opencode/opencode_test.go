@@ -16,10 +16,14 @@ import (
 // fakeServer is an OpenCode server as far as the client goes: the
 // shapes of 1.19.3's answers.
 type fakeServer struct {
-	mu        sync.Mutex
-	toolIDs   any
-	mcp       map[string]any
-	busyPolls int // status polls answered busy before idle
+	mu      sync.Mutex
+	toolIDs any
+	mcp     map[string]any
+	// The status is idle for idlePolls polls, then busy for busyPolls
+	// (at least one), then idle. With lateStart, the session has no
+	// message during the first idle polls: it has not started yet.
+	idlePolls, busyPolls int
+	lateStart            bool
 	// mcpStatus is rikugan's MCP status until a connect, connectTo after
 	// it; empty: connected.
 	mcpStatus, connectTo string
@@ -73,18 +77,23 @@ func (f *fakeServer) handler(t *testing.T) http.Handler {
 			_, _ = w.Write([]byte(`{"id":"ses_1"}`))
 		case r.URL.Path == "/session/ses_1/prompt_async":
 			f.prompts = append(f.prompts, decode())
+			f.polls = 0 // each prompt runs the session again
 			if len(f.prompts) > 1 && f.reminded != nil {
 				f.messages = f.reminded
 			}
 			w.WriteHeader(http.StatusNoContent)
 		case r.URL.Path == "/session/status":
 			f.polls++
-			if f.polls <= f.busyPolls {
+			if f.polls > f.idlePolls && f.polls <= f.idlePolls+max(f.busyPolls, 1) {
 				_, _ = w.Write([]byte(`{"ses_1":{"type":"busy"}}`))
 				return
 			}
 			_, _ = w.Write([]byte(`{}`))
 		case r.URL.Path == "/session/ses_1/message":
+			if f.lateStart && f.polls <= f.idlePolls {
+				_, _ = w.Write([]byte(`[]`))
+				return
+			}
 			_ = json.NewEncoder(w).Encode(f.messages)
 		case r.URL.Path == "/session/ses_1/abort":
 			f.aborted = true
@@ -280,7 +289,39 @@ func TestRunRemindsOnce(t *testing.T) {
 			if text, _ := json.Marshal(f.prompts[1]["parts"]); !strings.Contains(string(text), "no JSON object") {
 				t.Errorf("reminder %s does not say what is wrong", text)
 			}
+			if tools, _ := json.Marshal(f.prompts[1]["tools"]); !strings.Contains(string(tools), `"rikugan_*":false`) {
+				t.Errorf("reminder tools %s, want rikugan's off", tools)
+			}
+			if tools, _ := json.Marshal(f.prompts[0]["tools"]); strings.Contains(string(tools), "rikugan") {
+				t.Errorf("first prompt tools %s, want rikugan's on", tools)
+			}
 		})
+	}
+}
+
+// OpenCode marks a session busy only once its loop runs: a status still
+// idle right after the prompt is not the end of the session.
+func TestRunWaitsForTheSessionToStart(t *testing.T) {
+	f := &fakeServer{idlePolls: 3, lateStart: true}
+	_ = json.Unmarshal([]byte(`[{"info":{"role":"assistant"},"parts":[{"type":"text","text":"{\"cause\":\"x\"}"}]}]`), &f.messages)
+	res, err := client(t, f).Run(context.Background(), Request{Timeout: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(res.Answer) != `{"cause":"x"}` || len(f.prompts) != 1 {
+		t.Errorf("answer %s after %d prompts, want the answer after one", res.Answer, len(f.prompts))
+	}
+}
+
+// A session that answered before wait ever saw it busy has ended.
+func TestRunTakesAnAnswerSeenIdleOnly(t *testing.T) {
+	f := &fakeServer{idlePolls: 1 << 30}
+	_ = json.Unmarshal([]byte(`[{"info":{"id":"msg_1","role":"user"},"parts":[]},
+		{"info":{"id":"msg_2","role":"assistant","parentID":"msg_1","finish":"tool-calls","time":{"completed":1}},"parts":[]},
+		{"info":{"id":"msg_3","role":"assistant","parentID":"msg_1","finish":"stop","time":{"completed":2}},"parts":[{"type":"text","text":"{\"cause\":\"x\"}"}]}]`), &f.messages)
+	res, err := client(t, f).Run(context.Background(), Request{Timeout: time.Minute})
+	if err != nil || string(res.Answer) != `{"cause":"x"}` || res.Stopped != "" {
+		t.Errorf("answer %s stopped %q err %v", res.Answer, res.Stopped, err)
 	}
 }
 
