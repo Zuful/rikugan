@@ -7,7 +7,8 @@
 # opencode.json is deploy/compose's config, rikugan's MCP server alone
 # and every native tool off, plus the Ollama provider
 # (test/opencode-config-sync.sh keeps them in sync). Ollama must listen
-# with a context of 32k tokens or more: see README.md.
+# with a context of 32k tokens or more: see README.md. LAB_MODEL picks
+# another provider's model instead, its API key in escalation.env.
 services:
   rikugan-serve:
     environment:
@@ -15,7 +16,7 @@ services:
       RIKUGAN_ESCALATION: "on"
       RIKUGAN_ESCALATION_LOGS: ${RIKUGAN_ESCALATION_LOGS:-on}
       RIKUGAN_ESCALATION_PER_HOUR: ${RIKUGAN_ESCALATION_PER_HOUR:-4}
-      RIKUGAN_ESCALATION_TIMEOUT: ${RIKUGAN_ESCALATION_TIMEOUT:-15m}
+      RIKUGAN_ESCALATION_TIMEOUT: ${RIKUGAN_ESCALATION_TIMEOUT:-30m}
       RIKUGAN_ESCALATION_MONTHLY_BUDGET: ${RIKUGAN_ESCALATION_MONTHLY_BUDGET:-1000}
       OPENCODE_URL: http://opencode:4096
     env_file:
@@ -45,6 +46,7 @@ services:
       XDG_STATE_HOME: /home/opencode/.local/state
       LAB_OLLAMA_URL: ${LAB_OLLAMA_URL:-http://host.docker.internal:11434/v1}
       LAB_OLLAMA_MODEL: ${LAB_OLLAMA_MODEL:-gemma4:12b-it-qat}
+      LAB_MODEL: ${LAB_MODEL:-ollama/${LAB_OLLAMA_MODEL:-gemma4:12b-it-qat}}
     env_file:
       - path: escalation.env
         required: true
