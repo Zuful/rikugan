@@ -48,6 +48,15 @@ type CommandRunner interface {
 type execRunner struct{}
 
 func (execRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return execRun(ctx, false, name, args...)
+}
+
+// RunCombined returns stdout and stderr together, in one buffer.
+func (execRunner) RunCombined(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return execRun(ctx, true, name, args...)
+}
+
+func execRun(ctx context.Context, combined bool, name string, args ...string) ([]byte, error) {
 	// #nosec G204 -- name is the literal "docker" at every call site and
 	// CommandContext never goes through a shell, so the argv entries cannot
 	// be reinterpreted as commands. The one residual risk is argument
@@ -59,8 +68,15 @@ func (execRunner) Run(ctx context.Context, name string, args ...string) ([]byte,
 	var out, errBuf bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errBuf
+	if combined {
+		cmd.Stderr = &out
+	}
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("%s %v: %w (stderr: %s)", name, args, err, errBuf.String())
+		stderr := errBuf.Bytes()
+		if combined {
+			stderr = out.Bytes()[max(0, out.Len()-300):] // the error is last
+		}
+		return nil, fmt.Errorf("%s %v: %w (stderr: %s)", name, args, err, stderr)
 	}
 	return out.Bytes(), nil
 }

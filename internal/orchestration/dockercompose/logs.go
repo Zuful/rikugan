@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
@@ -31,26 +30,6 @@ const (
 // streams onto its own, and services log on either.
 type CombinedRunner interface {
 	RunCombined(ctx context.Context, name string, args ...string) ([]byte, error)
-}
-
-func (execRunner) RunCombined(ctx context.Context, name string, args ...string) ([]byte, error) {
-	// #nosec G204 -- as in Run: name is the literal "docker", no shell,
-	// and the one external value, a container ID from docker compose ps,
-	// follows "--".
-	cmd := exec.CommandContext(ctx, name, args...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("%s %v: %w (output: %s)", name, args, err, truncateOutput(out))
-	}
-	return out, nil
-}
-
-func truncateOutput(b []byte) string {
-	const limit = 300
-	if len(b) > limit {
-		return string(b[:limit]) + "…"
-	}
-	return string(b)
 }
 
 // GetLogs returns the lines the service's containers wrote between
