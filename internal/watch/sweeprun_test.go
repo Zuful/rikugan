@@ -124,6 +124,24 @@ func TestSweepScopeAndSchedule(t *testing.T) {
 	}
 }
 
+// A real clock moves between two reads: the first sweep must still run,
+// or RunDue returns a deadline already past and the daemon spins.
+func TestFirstSweepRunsWithAMovingClock(t *testing.T) {
+	h, chk, _ := sweepHarness(t, nil)
+	now := t0
+	h.d.Now = func() time.Time {
+		now = now.Add(time.Nanosecond)
+		return now
+	}
+	next := h.due()
+	if len(chk.prevs) != 2 {
+		t.Fatalf("swept %v, want the first sweep to run", keysOf(chk.prevs))
+	}
+	if !next.After(now) {
+		t.Errorf("next due %s, not after now %s: the daemon would spin", next, now)
+	}
+}
+
 func TestSweepNotificationsFollowTheStateMachine(t *testing.T) {
 	inv, deg, ok := health.StatusInvestigate, health.StatusDegraded, health.StatusOK
 	h, _, tg := sweepHarness(t, map[string][]health.Status{

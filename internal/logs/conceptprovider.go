@@ -77,7 +77,7 @@ func (c *ConceptProvider) getLogsTool() provider.ToolDefinition {
 		),
 		mcp.WithString("service", mcp.Description("Service name (mapped to the backend's primary label, e.g. `app` for Loki).")),
 		mcp.WithString("namespace", mcp.Description("Kubernetes namespace to scope the query.")),
-		mcp.WithString("query", mcp.Description("Optional native query expression (e.g. a full LogQL selector for Loki). When set, it overrides service/namespace selector building.")),
+		mcp.WithString("query", mcp.Description("Optional native query expression: a full LogQL selector for Loki, overriding service/namespace selector building. Other backends have no query language: there it is a plain substring the lines must contain (e.g. `error`, not `status >= 500`).")),
 		mcp.WithString("start", mcp.Description("Start time in RFC3339 (default: 1 hour ago).")),
 		mcp.WithString("end", mcp.Description("End time in RFC3339 (default: now).")),
 		mcp.WithNumber("limit", mcp.Description("Max log lines to return (default 100, max 500).")),
@@ -94,7 +94,7 @@ func (c *ConceptProvider) tailLogsTool() provider.ToolDefinition {
 		),
 		mcp.WithString("service", mcp.Description("Service name (mapped to the backend's primary label).")),
 		mcp.WithString("namespace", mcp.Description("Kubernetes namespace to scope the query.")),
-		mcp.WithString("query", mcp.Description("Optional native query expression overriding service/namespace.")),
+		mcp.WithString("query", mcp.Description("Optional native query expression overriding service/namespace (a LogQL selector for Loki); a plain substring of the lines for other backends.")),
 		mcp.WithNumber("lines", mcp.Description("Number of recent lines to fetch (default 100, max 500).")),
 	)
 	return provider.ToolDefinition{Tool: tool, Handler: c.handleTailLogs}
