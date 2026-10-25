@@ -524,12 +524,12 @@ func (d *Daemon) RunDue(ctx context.Context) (time.Time, error) {
 		}
 	}
 	if d.Sweep != nil {
-		if !d.nextSweep().After(now) {
+		if !d.nextSweep(now).After(now) {
 			if err := d.runSweep(ctx); err != nil {
 				return time.Time{}, err
 			}
 		}
-		if due := d.nextSweep(); next.IsZero() || due.Before(next) {
+		if due := d.nextSweep(now); next.IsZero() || due.Before(next) {
 			next = due
 		}
 		retry, err := d.retrySweeps(ctx)

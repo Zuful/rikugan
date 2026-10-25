@@ -102,13 +102,16 @@ func (d *Daemon) replaySweep(service string, at time.Time, data json.RawMessage)
 	}
 }
 
-// nextSweep is when the next sweep is due: now on a first start.
-func (d *Daemon) nextSweep() time.Time {
+// nextSweep is when the next sweep is due: now on a first start. now is
+// passed, not read again: a clock read later is later, and a first sweep
+// due at that later instant is never due at RunDue's now, which then
+// returns it as the next deadline, already past, forever.
+func (d *Daemon) nextSweep(now time.Time) time.Time {
 	if d.Sweep == nil {
 		return time.Time{}
 	}
 	if d.lastSweep.IsZero() {
-		return d.now()
+		return now
 	}
 	return d.lastSweep.Add(d.Sweep.interval())
 }
