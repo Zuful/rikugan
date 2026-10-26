@@ -3,6 +3,7 @@ package watch
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -99,8 +100,9 @@ func TestSweepScopeAndSchedule(t *testing.T) {
 	if _, swept := chk.prevs["shop/api"]; !swept || len(chk.prevs) != 2 {
 		t.Fatalf("swept %v, want shop/api and shop/web only (excluded, covered and unlisted left out)", keysOf(chk.prevs))
 	}
-	if !next.Equal(t0.Add(DefaultSweepInterval)) {
-		t.Errorf("next due %s, want one interval later", next)
+	// shop/missing failed to list: it is tried again in a minute.
+	if !next.Equal(t0.Add(retryAfter)) {
+		t.Errorf("next due %s, want a listing retry a minute later", next)
 	}
 	if chk.prevs["shop/api"][0] != nil {
 		t.Error("the first sweep of a service has no previous sweep")
@@ -121,6 +123,45 @@ func TestSweepScopeAndSchedule(t *testing.T) {
 	}
 	if n := h.count(KindSweep + " "); n != 5 {
 		t.Errorf("%d sweep records, want 5", n)
+	}
+}
+
+// A namespace that fails to list is tried again after a minute, then
+// twice as long each time, until the next full sweep.
+func TestSweepRetriesAFailedListing(t *testing.T) {
+	h, chk, _ := sweepHarness(t, nil)
+	h.d.Sweep.Namespaces = []string{"other"}
+	fs := h.d.Sweep.Services.(*fakeServices)
+	var nexts []time.Duration
+	for at := time.Duration(0); at < DefaultSweepInterval; {
+		next := h.at(at).due()
+		nexts = append(nexts, next.Sub(t0))
+		at = next.Sub(t0)
+	}
+	want := []time.Duration{1, 3, 7, 15, 31, 63, 127}
+	for i, m := range want {
+		want[i] = m * time.Minute
+	}
+	want = append(want, DefaultSweepInterval)
+	if !slices.Equal(nexts, want) {
+		t.Fatalf("deadlines %v, want %v", nexts, want)
+	}
+
+	// The listing comes back on a retry: its services are swept then.
+	fs.byNS["other"] = []provider.Service{svcIn("other", "api")}
+	h.at(DefaultSweepInterval).due() // full sweep, fine now
+	if _, swept := chk.prevs["other/api"]; !swept {
+		t.Fatal("other/api not swept once listed")
+	}
+	delete(fs.byNS, "other")
+	h.at(2 * DefaultSweepInterval).due() // fails again
+	fs.byNS["other"] = []provider.Service{svcIn("other", "api")}
+	next := h.at(2*DefaultSweepInterval + retryAfter).due()
+	if len(chk.prevs["other/api"]) != 2 {
+		t.Errorf("other/api swept %d times, want again on the retry", len(chk.prevs["other/api"]))
+	}
+	if !next.Equal(t0.Add(3 * DefaultSweepInterval)) {
+		t.Errorf("next due %s, want the next full sweep once the retry worked", next)
 	}
 }
 
