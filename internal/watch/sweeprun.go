@@ -116,19 +116,43 @@ func (d *Daemon) nextSweep(now time.Time) time.Time {
 	return d.lastSweep.Add(d.Sweep.interval())
 }
 
+// listingRetry holds the namespaces whose listing failed in the last
+// sweep: a passing API error must not leave them unswept for a whole
+// interval. They are tried again after a minute, then twice as long
+// each time, until the next full sweep takes over.
+type listingRetry struct {
+	namespaces []string
+	at         time.Time
+	delay      time.Duration
+}
+
 // runSweep sweeps every service of the configured namespaces, except the
 // excluded ones and those a rollout check still covers.
 func (d *Daemon) runSweep(ctx context.Context) error {
 	now := d.now()
 	d.lastSweep = now // even if some services fail, the next sweep waits an interval
+	d.listing = listingRetry{delay: retryAfter}
+	return d.sweepNamespaces(ctx, d.Sweep.Namespaces, now)
+}
+
+// retryListing sweeps again the namespaces whose listing failed.
+func (d *Daemon) retryListing(ctx context.Context, now time.Time) error {
+	namespaces := d.listing.namespaces
+	d.listing.namespaces, d.listing.at = nil, time.Time{}
+	d.listing.delay *= 2
+	return d.sweepNamespaces(ctx, namespaces, now)
+}
+
+func (d *Daemon) sweepNamespaces(ctx context.Context, namespaces []string, now time.Time) error {
 	if d.sweeps == nil {
 		d.sweeps = map[string]*sweepServiceState{}
 	}
 	var swept []provider.Service
-	for _, ns := range d.Sweep.Namespaces {
+	for _, ns := range namespaces {
 		services, err := d.Sweep.Services.ListServices(ctx, ns)
 		if err != nil {
 			d.logger().Warn("sweep: cannot list services", slog.String("namespace", ns), slog.String("error", err.Error()))
+			d.listing.namespaces = append(d.listing.namespaces, ns)
 			continue
 		}
 		for _, svc := range services {
@@ -143,6 +167,14 @@ func (d *Daemon) runSweep(ctx context.Context) error {
 				continue
 			}
 			swept = append(swept, svc)
+		}
+	}
+	if len(d.listing.namespaces) > 0 {
+		// Past the next full sweep, that sweep tries them anyway.
+		if at := now.Add(d.listing.delay); at.Before(d.nextSweep(now)) {
+			d.listing.at = at
+		} else {
+			d.listing = listingRetry{}
 		}
 	}
 	return d.sweepServices(ctx, swept)

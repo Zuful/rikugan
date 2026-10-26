@@ -93,6 +93,7 @@ type Daemon struct {
 	services  map[string]*serviceState
 	sweeps    map[string]*sweepServiceState
 	lastSweep time.Time
+	listing   listingRetry
 	outages   map[string]*outage // by backend kind
 	// invalidWarned holds the invalid templates the team was told about.
 	invalidWarned map[string]bool
@@ -309,6 +310,7 @@ func (d *Daemon) Replay() error {
 	d.services = map[string]*serviceState{}
 	d.sweeps = map[string]*sweepServiceState{}
 	d.lastSweep = time.Time{}
+	d.listing = listingRetry{}
 	d.outages = map[string]*outage{}
 	d.invalidWarned = map[string]bool{}
 	if d.Escalation != nil {
@@ -531,6 +533,14 @@ func (d *Daemon) RunDue(ctx context.Context) (time.Time, error) {
 		}
 		if due := d.nextSweep(now); next.IsZero() || due.Before(next) {
 			next = due
+		}
+		if at := d.listing.at; !at.IsZero() && !at.After(now) {
+			if err := d.retryListing(ctx, now); err != nil {
+				return time.Time{}, err
+			}
+		}
+		if at := d.listing.at; !at.IsZero() && (next.IsZero() || at.Before(next)) {
+			next = at
 		}
 		retry, err := d.retrySweeps(ctx)
 		if err != nil {
